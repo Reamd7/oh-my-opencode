@@ -1,3 +1,19 @@
+/**
+ * 自动更新检查器钩子
+ * 
+ * 功能：
+ * - 在会话创建时检查插件更新
+ * - 支持自动更新和手动通知两种模式
+ * - 显示启动动画和版本信息
+ * - 检测本地开发模式
+ * - 支持多渠道版本管理（latest, alpha, beta等）
+ * 
+ * 更新流程：
+ * 1. 检测当前版本和最新版本
+ * 2. 如果启用自动更新，更新配置文件中的版本号
+ * 3. 清除npm缓存并运行bun install
+ * 4. 显示更新成功通知
+ */
 import type { PluginInput } from "@opencode-ai/plugin"
 import { getCachedVersion, getLocalDevVersion, findPluginEntry, getLatestVersion, updatePinnedVersion } from "./checker"
 import { invalidatePackage } from "./cache"
@@ -9,22 +25,44 @@ import { isModelCacheAvailable } from "../../shared/model-availability"
 import { hasConnectedProvidersCache, updateConnectedProvidersCache } from "../../shared/connected-providers-cache"
 import type { AutoUpdateCheckerOptions } from "./types"
 
+// 西西弗斯旋转动画帧
 const SISYPHUS_SPINNER = ["·", "•", "●", "○", "◌", "◦", " "]
 
+/**
+ * 判断是否为预发布版本（包含 - 符号）
+ */
 export function isPrereleaseVersion(version: string): boolean {
   return version.includes("-")
 }
 
+/**
+ * 判断是否为dist-tag（不以数字开头）
+ */
 export function isDistTag(version: string): boolean {
   const startsWithDigit = /^\d/.test(version)
   return !startsWithDigit
 }
 
+/**
+ * 判断是否为预发布版本或dist-tag
+ */
 export function isPrereleaseOrDistTag(pinnedVersion: string | null): boolean {
   if (!pinnedVersion) return false
   return isPrereleaseVersion(pinnedVersion) || isDistTag(pinnedVersion)
 }
 
+/**
+ * 从版本号中提取渠道名称
+ * 
+ * 支持的渠道：
+ * - latest: 稳定版本
+ * - alpha, beta, rc, canary, next: 预发布渠道
+ * 
+ * @example
+ * extractChannel("1.0.0-alpha.1") // "alpha"
+ * extractChannel("next") // "next"
+ * extractChannel("1.0.0") // "latest"
+ */
 export function extractChannel(version: string | null): string {
   if (!version) return "latest"
   
@@ -45,6 +83,15 @@ export function extractChannel(version: string | null): string {
   return "latest"
 }
 
+/**
+ * 创建自动更新检查器钩子
+ * 
+ * @param ctx - 插件上下文
+ * @param options - 配置选项
+ * @param options.showStartupToast - 是否显示启动提示（默认true）
+ * @param options.isSisyphusEnabled - 是否启用Sisyphus模式（默认false）
+ * @param options.autoUpdate - 是否自动更新（默认true）
+ */
 export function createAutoUpdateCheckerHook(ctx: PluginInput, options: AutoUpdateCheckerOptions = {}) {
   const { showStartupToast = true, isSisyphusEnabled = false, autoUpdate = true } = options
 
@@ -63,23 +110,28 @@ export function createAutoUpdateCheckerHook(ctx: PluginInput, options: AutoUpdat
 
   return {
     event: ({ event }: { event: { type: string; properties?: unknown } }) => {
+      // 只在会话创建时检查一次
       if (event.type !== "session.created") return
       if (hasChecked) return
 
+      // 跳过子会话
       const props = event.properties as { info?: { parentID?: string } } | undefined
       if (props?.info?.parentID) return
 
       hasChecked = true
 
+      // 异步执行更新检查，避免阻塞会话创建
       setTimeout(async () => {
         const cachedVersion = getCachedVersion()
         const localDevVersion = getLocalDevVersion(ctx.directory)
         const displayVersion = localDevVersion ?? cachedVersion
 
+        // 显示配置错误、模型缓存警告、连接的提供商状态
         await showConfigErrorsIfAny(ctx)
         await showModelCacheWarningIfNeeded(ctx)
         await updateAndShowConnectedProvidersCacheStatus(ctx)
 
+        // 本地开发模式：显示开发版本提示
         if (localDevVersion) {
           if (showStartupToast) {
             showLocalDevToast(ctx, displayVersion, isSisyphusEnabled).catch(() => {})
@@ -88,10 +140,12 @@ export function createAutoUpdateCheckerHook(ctx: PluginInput, options: AutoUpdat
           return
         }
 
+        // 显示当前版本
         if (showStartupToast) {
           showVersionToast(ctx, displayVersion, getToastMessage(false)).catch(() => {})
         }
 
+        // 后台检查更新
         runBackgroundUpdateCheck(ctx, autoUpdate, getToastMessage).catch(err => {
           log("[auto-update-checker] Background update check failed:", err)
         })
@@ -100,6 +154,16 @@ export function createAutoUpdateCheckerHook(ctx: PluginInput, options: AutoUpdat
   }
 }
 
+/**
+ * 后台执行更新检查
+ * 
+ * 流程：
+ * 1. 查找插件配置
+ * 2. 获取当前版本和最新版本
+ * 3. 比较版本号
+ * 4. 如果启用自动更新，更新配置并安装
+ * 5. 显示相应的通知
+ */
 async function runBackgroundUpdateCheck(
   ctx: PluginInput,
   autoUpdate: boolean,
@@ -118,6 +182,7 @@ async function runBackgroundUpdateCheck(
     return
   }
 
+  // 根据固定版本提取渠道（latest/alpha/beta等）
   const channel = extractChannel(pluginInfo.pinnedVersion ?? currentVersion)
   const latestVersion = await getLatestVersion(channel)
   if (!latestVersion) {
@@ -125,6 +190,7 @@ async function runBackgroundUpdateCheck(
     return
   }
 
+  // 已是最新版本
   if (currentVersion === latestVersion) {
     log("[auto-update-checker] Already on latest version for channel:", channel)
     return
@@ -132,12 +198,14 @@ async function runBackgroundUpdateCheck(
 
   log(`[auto-update-checker] Update available (${channel}): ${currentVersion} → ${latestVersion}`)
 
+  // 仅通知模式
   if (!autoUpdate) {
     await showUpdateAvailableToast(ctx, latestVersion, getToastMessage)
     log("[auto-update-checker] Auto-update disabled, notification only")
     return
   }
 
+  // 更新配置文件中的固定版本
   if (pluginInfo.isPinned) {
     const updated = updatePinnedVersion(pluginInfo.configPath, pluginInfo.entry, latestVersion)
     if (!updated) {
@@ -148,8 +216,10 @@ async function runBackgroundUpdateCheck(
     log(`[auto-update-checker] Config updated: ${pluginInfo.entry} → ${PACKAGE_NAME}@${latestVersion}`)
   }
 
+  // 清除缓存的包
   invalidatePackage(PACKAGE_NAME)
 
+  // 运行bun install安装新版本
   const installSuccess = await runBunInstallSafe()
 
   if (installSuccess) {

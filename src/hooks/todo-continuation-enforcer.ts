@@ -1,3 +1,23 @@
+/**
+ * Todo延续强制器钩子
+ * 
+ * 功能：
+ * - 强制代理完成所有待办任务
+ * - 检测代理中途停止的情况
+ * - 自动发送延续提示
+ * - 西西弗斯之石（Sisyphus Boulder）机制
+ * 
+ * 工作原理：
+ * 1. 监听会话停止事件
+ * 2. 检查是否有未完成的todo
+ * 3. 如果有未完成任务且代理被中止，启动倒计时
+ * 4. 倒计时结束后自动发送延续提示
+ * 5. 代理继续工作直到所有任务完成
+ * 
+ * 西西弗斯之石：
+ * 就像西西弗斯必须不断推石头上山，代理必须完成所有任务。
+ * 如果代理中途停止，系统会强制其继续，直到任务完成。
+ */
 import type { PluginInput } from "@opencode-ai/plugin"
 import { existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
@@ -13,6 +33,7 @@ import { createSystemDirective, SystemDirectiveTypes } from "../shared/system-di
 
 const HOOK_NAME = "todo-continuation-enforcer"
 
+// 默认跳过的代理（不强制延续）
 const DEFAULT_SKIP_AGENTS = ["prometheus", "compaction"]
 
 export interface TodoContinuationEnforcerOptions {
@@ -41,6 +62,7 @@ interface SessionState {
   abortDetectedAt?: number
 }
 
+// 延续提示消息
 const CONTINUATION_PROMPT = `${createSystemDirective(SystemDirectiveTypes.TODO_CONTINUATION)}
 
 Incomplete tasks remain in your todo list. Continue working on the next pending task.
@@ -49,10 +71,16 @@ Incomplete tasks remain in your todo list. Continue working on the next pending 
 - Mark each task complete when finished
 - Do not stop until all tasks are done`
 
+// 倒计时秒数
 const COUNTDOWN_SECONDS = 2
+// Toast显示时长
 const TOAST_DURATION_MS = 900
+// 倒计时宽限期（避免误触发）
 const COUNTDOWN_GRACE_PERIOD_MS = 500
 
+/**
+ * 获取消息存储目录
+ */
 function getMessageDir(sessionID: string): string | null {
   if (!existsSync(MESSAGE_STORAGE)) return null
 
@@ -67,6 +95,9 @@ function getMessageDir(sessionID: string): string | null {
   return null
 }
 
+/**
+ * 获取未完成任务数量
+ */
 function getIncompleteCount(todos: Todo[]): number {
   return todos.filter(t => t.status !== "completed" && t.status !== "cancelled").length
 }
@@ -77,6 +108,11 @@ interface MessageInfo {
   error?: { name?: string; data?: unknown }
 }
 
+/**
+ * 判断最后一条助手消息是否被中止
+ * 
+ * 检测MessageAbortedError或AbortError
+ */
 function isLastAssistantMessageAborted(messages: Array<{ info?: MessageInfo }>): boolean {
   if (!messages || messages.length === 0) return false
 
@@ -91,6 +127,14 @@ function isLastAssistantMessageAborted(messages: Array<{ info?: MessageInfo }>):
   return errorName === "MessageAbortedError" || errorName === "AbortError"
 }
 
+/**
+ * 创建Todo延续强制器
+ * 
+ * @param ctx - 插件上下文
+ * @param options - 配置选项
+ * @param options.backgroundManager - 后台任务管理器
+ * @param options.skipAgents - 跳过的代理列表
+ */
 export function createTodoContinuationEnforcer(
   ctx: PluginInput,
   options: TodoContinuationEnforcerOptions = {}

@@ -1,3 +1,22 @@
+/**
+ * Ralph Loop 状态持久化模块
+ * 
+ * 负责将循环状态保存到文件系统并读取恢复
+ * 使用Markdown frontmatter格式存储结构化数据
+ * 
+ * 文件格式示例：
+ * ---
+ * active: true
+ * iteration: 3
+ * max_iterations: 100
+ * completion_promise: "DONE"
+ * started_at: "2026-01-29T10:00:00Z"
+ * session_id: "abc123"
+ * ultrawork: true
+ * ---
+ * 原始任务提示内容...
+ */
+
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { parseFrontmatter } from "../../shared/frontmatter"
@@ -28,6 +47,7 @@ export function readState(directory: string, customPath?: string): RalphLoopStat
       return null
     }
 
+    // 类型转换：支持字符串和布尔值
     const isActive = active === true || active === "true"
     const iterationNum = typeof iteration === "number" ? iteration : Number(iteration)
     
@@ -35,6 +55,7 @@ export function readState(directory: string, customPath?: string): RalphLoopStat
       return null
     }
 
+    // 去除YAML字符串值的引号
     const stripQuotes = (val: unknown): string => {
       const str = String(val ?? "")
       return str.replace(/^["']|["']$/g, "")

@@ -1,3 +1,32 @@
+/**
+ * 开始工作钩子 (Start Work Hook)
+ * 
+ * 处理 /start-work 命令，启动 Sisyphus 工作会话以执行 Prometheus 计划。
+ * 自动检测可用计划、管理工作状态、支持计划恢复和多计划选择。
+ * 
+ * Handles /start-work command to start Sisyphus work session for executing
+ * Prometheus plans. Automatically detects available plans, manages work state,
+ * supports plan resumption and multi-plan selection.
+ * 
+ * 工作流程 (Workflow):
+ * 1. 检测 /start-work 命令触发 (Detect /start-work command trigger)
+ * 2. 查找可用的 Prometheus 计划 (Find available Prometheus plans)
+ * 3. 创建或恢复 boulder.json 工作状态 (Create or resume boulder.json work state)
+ * 4. 注入计划上下文到会话 (Inject plan context into session)
+ * 5. 切换到 Atlas 编排器代理 (Switch to Atlas orchestrator agent)
+ * 
+ * 计划选择逻辑 (Plan selection logic):
+ * - 用户指定计划名：使用指定计划 (User specified plan: use specified plan)
+ * - 存在活跃工作：恢复现有工作 (Active work exists: resume existing work)
+ * - 单个未完成计划：自动选择 (Single incomplete plan: auto-select)
+ * - 多个未完成计划：询问用户选择 (Multiple incomplete plans: ask user to choose)
+ * 
+ * 状态管理 (State management):
+ * - boulder.json 记录活跃计划和会话ID (boulder.json tracks active plan and session IDs)
+ * - 支持跨会话恢复工作 (Supports cross-session work resumption)
+ * - 自动检测计划完成状态 (Auto-detects plan completion status)
+ */
+
 import type { PluginInput } from "@opencode-ai/plugin"
 import {
   readBoulderState,
@@ -14,6 +43,7 @@ import { getSessionAgent, updateSessionAgent } from "../../features/claude-code-
 
 export const HOOK_NAME = "start-work"
 
+// ultrawork/ulw 关键词模式 (ultrawork/ulw keyword pattern)
 const KEYWORD_PATTERN = /\b(ultrawork|ulw)\b/gi
 
 interface StartWorkHookInput {
@@ -46,6 +76,13 @@ function findPlanByName(plans: string[], requestedName: string): string | null {
   return partialMatch || null
 }
 
+/**
+ * 创建开始工作钩子
+ * Creates start work hook
+ * 
+ * @param ctx - 插件上下文 (Plugin context)
+ * @returns 钩子对象，监听 chat.message 事件 (Hook object that listens to chat.message event)
+ */
 export function createStartWorkHook(ctx: PluginInput) {
   return {
     "chat.message": async (
@@ -59,6 +96,8 @@ export function createStartWorkHook(ctx: PluginInput) {
         .join("\n")
         .trim() || ""
 
+      // 只在实际命令执行时触发（包含 <session-context> 标签）
+      // 不在描述文本时触发（如 "Start Sisyphus work session from Prometheus plan"）
       // Only trigger on actual command execution (contains <session-context> tag)
       // NOT on description text like "Start Sisyphus work session from Prometheus plan"
       const isStartWorkCommand = promptText.includes("<session-context>")
@@ -71,6 +110,7 @@ export function createStartWorkHook(ctx: PluginInput) {
         sessionID: input.sessionID,
       })
 
+      // 确保会话使用 Atlas 编排器 (Ensure session uses Atlas orchestrator)
       const currentAgent = getSessionAgent(input.sessionID)
       if (!currentAgent) {
         updateSessionAgent(input.sessionID, "atlas")
@@ -82,6 +122,7 @@ export function createStartWorkHook(ctx: PluginInput) {
 
       let contextInfo = ""
       
+      // 提取用户指定的计划名称 (Extract user-specified plan name)
       const explicitPlanName = extractUserRequestPlanName(promptText)
       
       if (explicitPlanName) {

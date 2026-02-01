@@ -1,6 +1,119 @@
+/**
+ * 内置技能定义
+ * 
+ * ## 功能概述
+ * 定义所有内置技能，为代理提供专业领域的指令和工作流。
+ * 技能是结构化的指令集，通过 load_skills 参数注入代理，使其具备特定领域的专业能力。
+ * 
+ * ## 技能系统架构
+ * 
+ * ### 技能的本质
+ * 技能不是代码，而是**结构化的指令文档**（Markdown格式），告诉代理：
+ * - 如何思考问题（思维模式）
+ * - 如何执行任务（工作流程）
+ * - 如何使用工具（最佳实践）
+ * - 如何避免错误（反模式）
+ * 
+ * ### 技能注入机制
+ * 技能通过 delegate_task 的 load_skills 参数注入到代理的系统提示中：
+ * ```typescript
+ * delegate_task({
+ *   category: 'quick',
+ *   load_skills: ['git-master', 'playwright'],  // 注入技能
+ *   prompt: '提交代码并测试网页'
+ * })
+ * ```
+ * 
+ * ### 技能分类
+ * 
+ * #### 1. 浏览器自动化技能
+ * - **playwright**: Playwright MCP 浏览器自动化（推荐）
+ * - **agent-browser**: agent-browser CLI 浏览器自动化（备选）
+ * - **dev-browser**: 持久化页面状态的浏览器自动化（高级）
+ * 
+ * #### 2. 开发工具技能
+ * - **git-master**: Git 专家（原子提交、rebase、历史搜索）
+ * 
+ * #### 3. 前端设计技能
+ * - **frontend-ui-ux**: 前端 UI/UX 设计和实现（设计师思维）
+ * 
+ * ## 技能结构
+ * 每个技能对象包含：
+ * - **name**: 技能标识符（用于 load_skills 参数）
+ * - **description**: 用途说明（触发条件、使用场景）
+ * - **template**: 详细指令（Markdown 格式，注入到代理提示中）
+ * - **mcpConfig**: 可选的 MCP 服务器配置（技能嵌入式 MCP）
+ * - **allowedTools**: 可选的工具白名单（限制代理可用工具）
+ * - **metadata**: 可选的元数据（许可证、兼容性等）
+ * 
+ * ## 技能加载优先级
+ * 技能系统支持多层级加载，优先级从高到低：
+ * 1. 项目技能: `.opencode/skills/` （项目特定）
+ * 2. 用户技能: `~/.config/opencode/skills/` （个人偏好）
+ * 3. 内置技能: 本文件定义的技能（系统默认）
+ * 
+ * ## 使用示例
+ * 
+ * ### 示例 1: Git 提交（单技能）
+ * ```typescript
+ * delegate_task({
+ *   category: 'quick',
+ *   load_skills: ['git-master'],
+ *   prompt: '提交所有更改，使用原子提交'
+ * })
+ * ```
+ * 
+ * ### 示例 2: 浏览器测试（单技能）
+ * ```typescript
+ * delegate_task({
+ *   category: 'quick',
+ *   load_skills: ['playwright'],
+ *   prompt: '打开 example.com 并截图'
+ * })
+ * ```
+ * 
+ * ### 示例 3: 前端开发（多技能组合）
+ * ```typescript
+ * delegate_task({
+ *   category: 'visual',
+ *   load_skills: ['frontend-ui-ux', 'playwright'],
+ *   prompt: '实现登录页面并测试表单提交'
+ * })
+ * ```
+ * 
+ * ## 技能与 MCP 的关系
+ * 部分技能嵌入了 MCP 服务器配置（mcpConfig），实现高级功能扩展：
+ * - **playwright 技能**: 嵌入 @playwright/mcp，提供浏览器自动化工具
+ * - 技能加载时，MCP 客户端会懒加载启动
+ * - MCP 工具自动注入到代理的工具集中
+ * 
+ * ## 注意事项
+ * - 技能内容（template）会完整注入到代理的系统提示中，影响上下文窗口
+ * - 选择合适的技能组合，避免不必要的上下文消耗
+ * - 技能指令应该清晰、具体、可执行
+ * - 技能不应包含代码实现，只包含指令和最佳实践
+ */
+
 import type { BuiltinSkill } from "./types"
 import type { BrowserAutomationProvider } from "../../config/schema"
 
+/**
+ * Playwright 浏览器自动化技能
+ * 
+ * 使用 Playwright MCP 服务器提供浏览器自动化能力。
+ * 这是推荐的浏览器自动化方案，功能全面且稳定。
+ * 
+ * **触发场景**:
+ * - 任何浏览器相关任务
+ * - 网页验证、浏览、信息收集
+ * - 网页抓取、测试、截图
+ * - 所有浏览器交互
+ * 
+ * **MCP 集成**:
+ * - 嵌入 @playwright/mcp MCP 服务器
+ * - 懒加载启动，按需使用
+ * - 提供完整的 Playwright API
+ */
 const playwrightSkill: BuiltinSkill = {
   name: "playwright",
   description: "MUST USE for any browser-related tasks. Browser automation via Playwright MCP - verification, browsing, information gathering, web scraping, testing, screenshots, and all browser interactions.",
@@ -15,6 +128,27 @@ This skill provides browser automation capabilities via the Playwright MCP serve
   },
 }
 
+/**
+ * agent-browser CLI 浏览器自动化技能
+ * 
+ * 使用 agent-browser CLI 工具提供浏览器自动化能力。
+ * 这是 Playwright 的备选方案，基于命令行接口。
+ * 
+ * **触发场景**:
+ * - 任何浏览器相关任务
+ * - 网页验证、浏览、信息收集
+ * - 网页抓取、测试、截图
+ * - 所有浏览器交互
+ * 
+ * **与 Playwright 的区别**:
+ * - 基于 CLI 而非 MCP
+ * - 使用 Bash 工具调用命令
+ * - 适合简单的浏览器任务
+ * 
+ * **工具限制**:
+ * - 仅允许使用 Bash 工具调用 agent-browser 命令
+ * - 通过 allowedTools 限制工具使用范围
+ */
 const agentBrowserSkill: BuiltinSkill = {
   name: "agent-browser",
   description: "MUST USE for any browser-related tasks. Browser automation via agent-browser CLI - verification, browsing, information gathering, web scraping, testing, screenshots, and all browser interactions.",
@@ -312,6 +446,42 @@ Install: \`bun add -g agent-browser && agent-browser install\`. Run \`agent-brow
   allowedTools: ["Bash(agent-browser:*)"],
 }
 
+/**
+ * 前端 UI/UX 设计技能
+ * 
+ * 赋予代理设计师思维，能够创造视觉惊艳、情感共鸣的用户界面。
+ * 即使没有设计稿，也能构思和实现美观、连贯的界面。
+ * 
+ * **核心理念**:
+ * - 设计师转开发者的视角
+ * - 关注间距、色彩和谐、微交互
+ * - 像素级完美、流畅动画、直观交互
+ * 
+ * **设计流程**:
+ * 1. 明确目的和用户
+ * 2. 选择大胆的美学方向（极简、复古未来、奢华等）
+ * 3. 定义技术约束
+ * 4. 实现生产级代码
+ * 
+ * **美学指南**:
+ * - 排版: 选择独特字体，避免 Arial/Inter/Roboto
+ * - 色彩: 使用 CSS 变量，主导色 + 锐利强调色
+ * - 动效: 关注高影响时刻，使用 CSS 优先
+ * - 空间: 非对称、重叠、对角流动、慷慨留白
+ * - 细节: 渐变网格、噪点纹理、几何图案、戏剧性阴影
+ * 
+ * **反模式（禁止）**:
+ * - 通用字体（Inter、Roboto、Arial、系统字体）
+ * - 陈词滥调的配色（白底紫渐变）
+ * - 可预测的布局和组件模式
+ * - 缺乏上下文特色的千篇一律设计
+ * 
+ * **适用场景**:
+ * - 前端界面开发
+ * - UI/UX 设计实现
+ * - 视觉效果优化
+ * - 用户体验改进
+ */
 const frontendUiUxSkill: BuiltinSkill = {
   name: "frontend-ui-ux",
   description: "Designer-turned-developer who crafts stunning UI/UX even without design mockups",
@@ -390,6 +560,77 @@ Match implementation complexity to aesthetic vision:
 Interpret creatively and make unexpected choices that feel genuinely designed for the context. No design should be the same. Vary between light and dark themes, different fonts, different aesthetics. You are capable of extraordinary creative work—don't hold back.`,
 }
 
+/**
+ * Git Master 技能 - Git 专家
+ * 
+ * 结合三大专业领域的 Git 专家技能：
+ * 1. **提交架构师**: 原子提交、依赖排序、风格检测
+ * 2. **Rebase 外科医生**: 历史重写、冲突解决、分支清理
+ * 3. **历史考古学家**: 查找特定更改的引入时间和位置
+ * 
+ * ## 核心原则: 默认多次提交（不可协商）
+ * 
+ * **硬性规则**:
+ * - 3+ 文件更改 -> 必须 2+ 提交（无例外）
+ * - 5+ 文件更改 -> 必须 3+ 提交（无例外）
+ * - 10+ 文件更改 -> 必须 5+ 提交（无例外）
+ * 
+ * **拆分标准**:
+ * - 不同目录/模块 -> 拆分
+ * - 不同组件类型（model/service/view）-> 拆分
+ * - 可独立回滚 -> 拆分
+ * - 不同关注点（UI/逻辑/配置/测试）-> 拆分
+ * - 新文件 vs 修改 -> 拆分
+ * 
+ * **仅在以下情况合并**:
+ * - 完全相同的原子单元（如函数 + 其测试）
+ * - 拆分会导致编译失败
+ * - 能用一句话解释为什么必须在一起
+ * 
+ * ## 工作模式
+ * 
+ * ### COMMIT 模式（提交）
+ * - 触发词: "commit", "커밋", 提交更改
+ * - 流程: 并行上下文收集 -> 风格检测 -> 分支分析 -> 原子提交
+ * 
+ * ### REBASE 模式（历史重写）
+ * - 触发词: "rebase", "리베이스", "squash", "cleanup history"
+ * - 流程: 分支状态检测 -> 安全检查 -> 交互式 rebase
+ * 
+ * ### HISTORY_SEARCH 模式（历史搜索）
+ * - 触发词: "find when", "who changed", "git blame", "bisect"
+ * - 流程: 使用 git log -S, git blame, git bisect 查找更改
+ * 
+ * ## 风格检测
+ * 
+ * 自动检测仓库的提交风格：
+ * - **SEMANTIC**: `feat: add login` (Conventional Commits)
+ * - **PLAIN**: `Add login feature` (纯描述)
+ * - **SENTENCE**: `Implemented the new login flow` (完整句子)
+ * - **SHORT**: `format`, `lint` (简短关键词)
+ * 
+ * 分析最近 30 次提交，自动匹配仓库风格。
+ * 
+ * ## 使用建议
+ * 
+ * **强烈推荐**: 使用 delegate_task 节省上下文
+ * ```typescript
+ * delegate_task({
+ *   category: 'quick',
+ *   load_skills: ['git-master'],
+ *   prompt: '提交所有更改，使用原子提交'
+ * })
+ * ```
+ * 
+ * **触发场景**:
+ * - 任何 Git 操作
+ * - 提交代码
+ * - Rebase/Squash
+ * - 查找更改历史
+ * - "谁写的这段代码"
+ * - "X 是什么时候添加的"
+ * - "找到引入 Y 的提交"
+ */
 const gitMasterSkill: BuiltinSkill = {
   name: "git-master",
   description:
@@ -1496,6 +1737,95 @@ POTENTIAL ACTIONS:
 - Bisect without proper good/bad boundaries -> Wasted time`,
 }
 
+/**
+ * dev-browser 技能 - 持久化浏览器自动化
+ * 
+ * 提供跨脚本执行保持页面状态的浏览器自动化能力。
+ * 适合需要多步骤、增量式完成的浏览器工作流。
+ * 
+ * ## 核心特性
+ * 
+ * ### 持久化页面状态
+ * - 页面状态在脚本执行之间保持
+ * - 支持增量式任务完成
+ * - 适合复杂的多步骤工作流
+ * 
+ * ### 两种工作模式
+ * 
+ * #### 1. 独立模式（默认）
+ * - 启动新的 Chromium 浏览器
+ * - 适合全新的自动化会话
+ * - 支持 headless 模式
+ * 
+ * #### 2. 扩展模式
+ * - 连接到用户现有的 Chrome 浏览器
+ * - 适合需要登录状态的场景
+ * - 可访问用户的认证会话
+ * 
+ * ## 使用策略
+ * 
+ * ### 本地/开源站点
+ * - 先阅读源代码
+ * - 直接编写选择器
+ * - 更高效、更准确
+ * 
+ * ### 未知页面布局
+ * - 使用 `getAISnapshot()` 发现元素
+ * - 使用 `selectSnapshotRef()` 交互元素
+ * - 通过 ref 引用元素（如 @e1, @e2）
+ * 
+ * ### 视觉反馈
+ * - 截图查看用户所见
+ * - 调试页面状态
+ * - 验证操作结果
+ * 
+ * ## 核心 API
+ * 
+ * ### 连接和页面管理
+ * ```typescript
+ * import { connect } from "@/client.js";
+ * const client = await connect();
+ * const page = await client.page("name");
+ * ```
+ * 
+ * ### ARIA 快照（元素发现）
+ * ```typescript
+ * const snapshot = await client.getAISnapshot("name");
+ * // 返回 YAML 格式的可访问性树，包含 ref 引用
+ * const element = await client.selectSnapshotRef("name", "e5");
+ * ```
+ * 
+ * ### 等待和截图
+ * ```typescript
+ * await waitForPageLoad(page);
+ * await page.screenshot({ path: "tmp/screenshot.png" });
+ * ```
+ * 
+ * ## 错误恢复
+ * - 失败后页面状态保持
+ * - 可以继续调试和操作
+ * - 支持增量式问题解决
+ * 
+ * ## 触发场景
+ * - 用户要求导航网站
+ * - 填写表单
+ * - 截图
+ * - 提取网页数据
+ * - 测试 Web 应用
+ * - 自动化浏览器工作流
+ * - 登录网站
+ * - 任何浏览器交互请求
+ * 
+ * ## 触发短语
+ * - "go to [url]"
+ * - "click on"
+ * - "fill out the form"
+ * - "take a screenshot"
+ * - "scrape"
+ * - "automate"
+ * - "test the website"
+ * - "log into"
+ */
 const devBrowserSkill: BuiltinSkill = {
   name: "dev-browser",
   description:
@@ -1716,10 +2046,41 @@ EOF
 \`\`\``,
 }
 
+/**
+ * 创建内置技能的选项
+ */
 export interface CreateBuiltinSkillsOptions {
+  /** 浏览器自动化提供商: "playwright" (默认) 或 "agent-browser" */
   browserProvider?: BrowserAutomationProvider
 }
 
+/**
+ * 创建内置技能数组
+ * 
+ * 根据配置选择合适的浏览器自动化技能，并返回所有内置技能。
+ * 
+ * ## 技能选择逻辑
+ * - 如果 browserProvider === "agent-browser": 使用 agent-browser CLI 技能
+ * - 否则（默认）: 使用 Playwright MCP 技能
+ * 
+ * ## 返回的技能列表
+ * 1. **浏览器技能**: playwright 或 agent-browser（根据配置）
+ * 2. **frontend-ui-ux**: 前端 UI/UX 设计技能
+ * 3. **git-master**: Git 专家技能
+ * 4. **dev-browser**: 持久化浏览器自动化技能
+ * 
+ * @param options - 创建选项
+ * @returns 内置技能数组
+ * 
+ * @example
+ * ```typescript
+ * // 使用默认 Playwright
+ * const skills = createBuiltinSkills();
+ * 
+ * // 使用 agent-browser
+ * const skills = createBuiltinSkills({ browserProvider: "agent-browser" });
+ * ```
+ */
 export function createBuiltinSkills(options: CreateBuiltinSkillsOptions = {}): BuiltinSkill[] {
   const { browserProvider = "playwright" } = options
 

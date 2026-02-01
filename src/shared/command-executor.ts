@@ -1,3 +1,22 @@
+/**
+ * 命令执行工具
+ * 
+ * 核心功能：
+ * - 执行 shell 命令并捕获输出
+ * - 支持 stdin 输入（用于 hook 命令）
+ * - 自动查找和使用 zsh/bash
+ * - 环境变量展开（~、$CLAUDE_PROJECT_DIR）
+ * 
+ * 使用场景：
+ * - Hook 命令执行（PreToolUse、PostToolUse 等）
+ * - 嵌入式命令解析（!`command` 语法）
+ * - 配置文件中的动态命令
+ * 
+ * 设计理念：
+ * - 优先使用用户的 login shell（保留 PATH 等环境变量）
+ * - 安全的路径展开和环境变量替换
+ * - 递归命令解析（支持命令嵌套）
+ */
 import { spawn } from "child_process"
 import { exec } from "child_process"
 import { promisify } from "util"
@@ -11,6 +30,9 @@ function getHomeDir(): string {
   return process.env.HOME || process.env.USERPROFILE || homedir()
 }
 
+/**
+ * 查找 shell 可执行文件路径
+ */
 function findShellPath(defaultPaths: string[], customPath?: string): string | null {
   if (customPath && existsSync(customPath)) {
     return customPath
@@ -33,19 +55,37 @@ function findBashPath(): string | null {
 
 const execAsync = promisify(exec)
 
+/** 命令执行结果 */
 export interface CommandResult {
+  /** 退出码 */
   exitCode: number
+  /** 标准输出 */
   stdout?: string
+  /** 标准错误 */
   stderr?: string
 }
 
+/** Hook 命令执行选项 */
 export interface ExecuteHookOptions {
+  /** 强制使用 zsh */
   forceZsh?: boolean
+  /** 自定义 zsh 路径 */
   zshPath?: string
 }
 
 /**
- * Execute a hook command with stdin input
+ * 执行 hook 命令（支持 stdin 输入）
+ * 
+ * 特性：
+ * - 自动展开 ~ 和 $CLAUDE_PROJECT_DIR
+ * - 优先使用 zsh login shell（保留用户环境）
+ * - 回退到 bash login shell
+ * - 捕获 stdout 和 stderr
+ * 
+ * @param command 要执行的命令
+ * @param stdin 标准输入内容
+ * @param cwd 工作目录
+ * @param options 执行选项
  */
 export async function executeHookCommand(
   command: string,
@@ -64,18 +104,15 @@ export async function executeHookCommand(
   let finalCommand = expandedCommand
 
   if (options?.forceZsh) {
-    // Always verify shell exists before using it
     const zshPath = findZshPath(options.zshPath)
     const escapedCommand = expandedCommand.replace(/'/g, "'\\''")
     if (zshPath) {
       finalCommand = `${zshPath} -lc '${escapedCommand}'`
     } else {
-      // Fall back to bash login shell to preserve PATH from user profile
       const bashPath = findBashPath()
       if (bashPath) {
         finalCommand = `${bashPath} -lc '${escapedCommand}'`
       }
-      // If neither zsh nor bash found, fall through to spawn with shell: true
     }
   }
 
@@ -118,7 +155,11 @@ export async function executeHookCommand(
 }
 
 /**
- * Execute a simple command and return output
+ * 执行简单命令并返回输出
+ * 
+ * 用于嵌入式命令解析（!`command` 语法）。
+ * 
+ * @returns 命令输出，错误时返回 [stderr: ...] 格式
  */
 export async function executeCommand(command: string): Promise<string> {
   try {
@@ -149,7 +190,7 @@ export async function executeCommand(command: string): Promise<string> {
 }
 
 /**
- * Find and execute embedded commands in text (!`command`)
+ * 嵌入式命令匹配结果
  */
 interface CommandMatch {
   fullMatch: string
@@ -158,8 +199,12 @@ interface CommandMatch {
   end: number
 }
 
+/** 嵌入式命令模式：!`command` */
 const COMMAND_PATTERN = /!`([^`]+)`/g
 
+/**
+ * 查找文本中的所有嵌入式命令
+ */
 function findCommands(text: string): CommandMatch[] {
   const matches: CommandMatch[] = []
   let match: RegExpExecArray | null
@@ -179,7 +224,15 @@ function findCommands(text: string): CommandMatch[] {
 }
 
 /**
- * Resolve embedded commands in text recursively
+ * 递归解析文本中的嵌入式命令
+ * 
+ * 将文本中的 !`command` 替换为命令执行结果。
+ * 支持嵌套命令（命令输出中可以再包含命令）。
+ * 
+ * @param text 待解析的文本
+ * @param depth 当前递归深度
+ * @param maxDepth 最大递归深度（防止无限递归）
+ * @returns 解析后的文本
  */
 export async function resolveCommandsInText(
   text: string,

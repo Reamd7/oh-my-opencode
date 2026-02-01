@@ -1,3 +1,27 @@
+/**
+ * slashcommand - 斜杠命令执行工具
+ * 
+ * ## 功能
+ * 执行自定义斜杠命令（/commit, /refactor等）
+ * 统一管理命令和技能
+ * 
+ * ## 命令来源（优先级从高到低）
+ * 1. Builtin: 内置命令（/refactor, /init-deep等）
+ * 2. OpenCode Project: .opencode/command/ (项目级)
+ * 3. Project: .claude/commands/ (Claude Code兼容)
+ * 4. OpenCode Global: ~/.config/opencode/command/ (用户级)
+ * 5. User: ~/.claude/commands/ (Claude Code兼容)
+ * 
+ * ## 与skill工具的区别
+ * - slashcommand: 用户主动调用的命令（/commit）
+ * - skill: 系统推荐的技能（playwright, git-master）
+ * 
+ * ## 特性
+ * - 支持YAML frontmatter元数据
+ * - 自动解析文件引用
+ * - 支持命令嵌套
+ * - Claude Code完全兼容
+ */
 import { tool, type ToolDefinition } from "@opencode-ai/plugin"
 import { existsSync, readdirSync, readFileSync } from "fs"
 import { join, basename, dirname } from "path"
@@ -180,11 +204,24 @@ ${commandListForDescription}
 </available_skills>`
 }
 
+/**
+ * 创建slashcommand工具
+ * 
+ * @param options - 命令加载选项
+ * @returns slashcommand工具定义
+ * 
+ * 该工具支持：
+ * - 懒加载命令列表
+ * - 缓存命令描述
+ * - 技能集成
+ * - 文件引用解析
+ */
 export function createSlashcommandTool(options: SlashcommandToolOptions = {}): ToolDefinition {
   let cachedCommands: CommandInfo[] | null = options.commands ?? null
   let cachedSkills: LoadedSkill[] | null = options.skills ?? null
   let cachedDescription: string | null = null
 
+  // 获取所有命令（带缓存）
   const getCommands = (): CommandInfo[] => {
     if (cachedCommands) return cachedCommands
     cachedCommands = discoverCommandsSync()

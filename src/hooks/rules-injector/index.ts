@@ -1,3 +1,34 @@
+/**
+ * 规则注入钩子 (Rules Injector Hook)
+ * 
+ * 功能：根据文件路径和规则条件，动态注入自定义规则到代理上下文
+ * 目的：实现条件化的代理行为控制，类似 .copilot-instructions.md 但更强大
+ * 
+ * 工作原理：
+ * 1. 监听文件操作工具（read/write/edit/multiedit）
+ * 2. 查找项目和用户目录下的规则文件（.copilot-instructions.md 或 .rules/*.md）
+ * 3. 解析规则文件的 YAML frontmatter，检查匹配条件（glob、regex、exclude）
+ * 4. 将匹配的规则内容注入到工具输出中
+ * 5. 使用内容哈希和真实路径双重去重，避免重复注入
+ * 
+ * 规则文件格式：
+ * ---
+ * glob: "src/**\/*.ts"        # 匹配文件路径（可选）
+ * regex: "test.*\\.ts$"       # 正则匹配（可选）
+ * exclude: "**\/*.test.ts"    # 排除路径（可选）
+ * ---
+ * <规则内容>
+ * 
+ * 规则优先级：
+ * 1. 距离文件最近的规则优先（按目录层级排序）
+ * 2. 内容哈希去重：相同内容的规则只注入一次
+ * 3. 真实路径去重：符号链接指向同一文件时只注入一次
+ * 
+ * 注入格式：
+ * [Rule: path/to/rule.md]
+ * [Match: glob pattern matched]
+ * <规则内容>
+ */
 import type { PluginInput } from "@opencode-ai/plugin";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -52,16 +83,29 @@ interface RuleToInject {
   distance: number;
 }
 
+// 监控的工具：只在文件读写操作时注入规则
 const TRACKED_TOOLS = ["read", "write", "edit", "multiedit"];
 
+/**
+ * 创建规则注入钩子
+ * 
+ * @param ctx - 插件上下文，提供项目根目录信息
+ * @returns 钩子对象，包含 tool.execute.before、tool.execute.after 和 event 处理器
+ */
 export function createRulesInjectorHook(ctx: PluginInput) {
+  // 会话级缓存：记录已注入的规则（通过内容哈希和真实路径双重去重）
   const sessionCaches = new Map<
     string,
     { contentHashes: Set<string>; realPaths: Set<string> }
   >();
+  // Batch 工具待处理的文件路径队列
   const pendingBatchFiles = new Map<string, string[]>();
+  // 动态内容截断器：根据上下文窗口自动截断长内容
   const truncator = createDynamicTruncator(ctx);
 
+  /**
+   * 获取会话缓存，首次访问时从持久化存储加载
+   */
   function getSessionCache(sessionID: string): {
     contentHashes: Set<string>;
     realPaths: Set<string>;
@@ -72,12 +116,34 @@ export function createRulesInjectorHook(ctx: PluginInput) {
     return sessionCaches.get(sessionID)!;
   }
 
+  /**
+   * 解析文件路径为绝对路径
+   */
   function resolveFilePath(path: string): string | null {
     if (!path) return null;
     if (path.startsWith("/")) return path;
     return resolve(ctx.directory, path);
   }
 
+  /**
+   * 处理文件路径并注入匹配的规则
+   * 
+   * 核心注入逻辑：
+   * 1. 查找项目和用户目录下的所有规则文件
+   * 2. 解析规则文件的 frontmatter，检查匹配条件
+   * 3. 过滤已注入的规则（通过真实路径和内容哈希）
+   * 4. 按距离排序（距离文件最近的规则优先）
+   * 5. 追加到工具输出中，格式：[Rule: path]\n[Match: reason]\n<content>
+   * 6. 更新缓存和持久化存储
+   * 
+   * 规则匹配逻辑：
+   * - .copilot-instructions.md：总是应用（无条件）
+   * - .rules/*.md：根据 frontmatter 的 glob/regex/exclude 条件匹配
+   * 
+   * 去重机制：
+   * - 真实路径去重：避免符号链接重复注入
+   * - 内容哈希去重：避免相同内容的规则重复注入
+   */
   async function processFilePathForInjection(
     filePath: string,
     sessionID: string,
@@ -130,6 +196,7 @@ export function createRulesInjectorHook(ctx: PluginInput) {
 
     if (toInject.length === 0) return;
 
+    // 按距离排序：距离文件最近的规则优先
     toInject.sort((a, b) => a.distance - b.distance);
 
     for (const rule of toInject) {
@@ -143,11 +210,21 @@ export function createRulesInjectorHook(ctx: PluginInput) {
     saveInjectedRules(sessionID, cache);
   }
 
+  /**
+   * 从 Batch 工具调用中提取文件路径
+   * 支持多种参数名称：filePath, file_path, path
+   */
   function extractFilePathFromToolCall(call: BatchToolCall): string | null {
     const params = call.parameters;
     return (params?.filePath ?? params?.file_path ?? params?.path) as string | null;
   }
 
+  /**
+   * 工具执行前钩子：提取 Batch 工具中的文件操作调用
+   * 
+   * 从 Batch 工具中提取所有 read/write/edit/multiedit 调用的文件路径
+   * 存储到 pendingBatchFiles 中，在 toolExecuteAfter 中统一处理
+   */
   const toolExecuteBefore = async (
     input: ToolExecuteInput,
     output: ToolExecuteBeforeOutput
@@ -172,6 +249,13 @@ export function createRulesInjectorHook(ctx: PluginInput) {
     }
   };
 
+  /**
+   * 工具执行后钩子：注入匹配的规则
+   * 
+   * 处理两种情况：
+   * 1. 文件操作工具（read/write/edit/multiedit）：直接处理单个文件
+   * 2. Batch 工具：处理之前提取的所有文件操作调用
+   */
   const toolExecuteAfter = async (
     input: ToolExecuteInput,
     output: ToolExecuteOutput
@@ -194,6 +278,13 @@ export function createRulesInjectorHook(ctx: PluginInput) {
     }
   };
 
+  /**
+   * 事件处理器：清理会话状态
+   * 
+   * 监听事件：
+   * - session.deleted：会话删除时清理内存和持久化缓存
+   * - session.compacted：会话压缩时重置缓存（压缩后上下文变化，需重新注入）
+   */
   const eventHandler = async ({ event }: EventInput) => {
     const props = event.properties as Record<string, unknown> | undefined;
 

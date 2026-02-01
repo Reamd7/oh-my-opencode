@@ -1,7 +1,67 @@
+/**
+ * Librarian - 多源文档和代码搜索专家
+ * 
+ * ## 角色定位
+ * Librarian是专门的代码库理解代理，擅长跨多个数据源搜索和聚合信息。
+ * 它整合官方文档、GitHub代码搜索和Web搜索，提供全面的技术答案。
+ * 
+ * ## 核心能力
+ * - 多仓库代码分析和搜索
+ * - 官方文档检索（Context7集成）
+ * - GitHub开源实现查找（gh CLI + grep.app）
+ * - Web搜索最新技术信息（Exa集成）
+ * - 文档站点地图发现和版本化文档处理
+ * - GitHub永久链接构建（带commit SHA）
+ * 
+ * ## 数据源策略
+ * 1. **概念性问题（TYPE A）**：文档发现 → Context7 + 站点地图 → Web搜索
+ * 2. **实现参考（TYPE B）**：克隆仓库 → 代码搜索 → git blame上下文
+ * 3. **历史上下文（TYPE C）**：GitHub issues/PRs + git历史
+ * 4. **综合研究（TYPE D）**：并行执行所有数据源（6+工具调用）
+ * 
+ * ## 使用场景
+ * - "如何使用[库]？"
+ * - "[框架特性]的最佳实践是什么？"
+ * - "为什么[外部依赖]这样行为？"
+ * - "查找[库]的使用示例"
+ * - 处理不熟悉的npm/pip/cargo包
+ * - 需要查看远程仓库代码时
+ * - 解释库内部实现时
+ * 
+ * ## 工作流程
+ * 1. **请求分类**：识别TYPE A/B/C/D
+ * 2. **文档发现**（TYPE A/D）：官方文档 → 版本检查 → 站点地图 → 目标页面
+ * 3. **并行执行**：同时调用多个工具（最少2-5个）
+ * 4. **证据合成**：每个声明必须附带GitHub永久链接
+ * 
+ * ## 成本分类
+ * CHEAP - 使用高效模型，适合频繁的文档和代码搜索
+ * 
+ * ## 工具限制
+ * 只读代理，禁用：write, edit, task, delegate_task, call_omo_agent
+ * 专注于信息检索，不执行代码修改或代理委派
+ */
+
 import type { AgentConfig } from "@opencode-ai/sdk"
 import type { AgentPromptMetadata } from "./types"
 import { createAgentToolRestrictions } from "../shared/permission-compat"
 
+/**
+ * Librarian代理的元数据配置
+ * 
+ * 定义Librarian在Sisyphus提示词中的展示方式和触发条件。
+ * 
+ * **分类**: exploration（探索类代理）
+ * **成本**: CHEAP（使用高效模型）
+ * **关键触发器**: 提到外部库/源代码时后台启动librarian
+ * 
+ * **使用场景**:
+ * - "如何使用[库]？"
+ * - "[框架特性]的最佳实践是什么？"
+ * - "为什么[外部依赖]这样行为？"
+ * - "查找[库]的使用示例"
+ * - 处理不熟悉的npm/pip/cargo包
+ */
 export const LIBRARIAN_PROMPT_METADATA: AgentPromptMetadata = {
   category: "exploration",
   cost: "CHEAP",
@@ -19,6 +79,41 @@ export const LIBRARIAN_PROMPT_METADATA: AgentPromptMetadata = {
   ],
 }
 
+/**
+ * 创建Librarian代理配置
+ * 
+ * Librarian是多源文档和代码搜索专家，整合官方文档、GitHub代码搜索和Web搜索。
+ * 
+ * **配置特点:**
+ * - 模型: 使用高效模型（推荐Claude Sonnet或类似）
+ * - 温度: 0.1（确保搜索结果的一致性）
+ * - 工具限制: 只读代理，禁用write/edit/task/delegate_task/call_omo_agent
+ * - 多工具集成: Context7, gh CLI, grep.app, websearch
+ * - 并行执行: 支持同时调用多个搜索工具
+ * 
+ * **数据源策略:**
+ * 1. **概念性问题（TYPE A）**: 文档发现 → Context7 + 站点地图 → Web搜索
+ * 2. **实现参考（TYPE B）**: 克隆仓库 → 代码搜索 → git blame上下文
+ * 3. **历史上下文（TYPE C）**: GitHub issues/PRs + git历史
+ * 4. **综合研究（TYPE D）**: 并行执行所有数据源（6+工具调用）
+ * 
+ * **工作流程:**
+ * 1. 请求分类: 识别TYPE A/B/C/D
+ * 2. 文档发现: 官方文档 → 版本检查 → 站点地图 → 目标页面
+ * 3. 并行执行: 同时调用多个工具（最少2-5个）
+ * 4. 证据合成: 每个声明必须附带GitHub永久链接
+ * 
+ * @param model - 模型标识符（推荐使用Claude Sonnet或类似高效模型）
+ * @returns 配置好的Librarian代理，包含多源搜索能力和只读限制
+ * 
+ * @example
+ * ```typescript
+ * const librarian = createLibrarianAgent("anthropic/claude-sonnet-4-5")
+ * // 后台启动Librarian搜索外部资源
+ * delegate_task(agent="librarian", run_in_background=true, 
+ *   prompt="Find React 18 useEffect cleanup best practices")
+ * ```
+ */
 export function createLibrarianAgent(model: string): AgentConfig {
   const restrictions = createAgentToolRestrictions([
     "write",
@@ -323,4 +418,18 @@ grep_app_searchGitHub(query: "useQuery")
 `,
   }
 }
+
+/**
+ * 创建Librarian代理配置
+ * 
+ * @param model - 模型标识符（推荐使用Claude Sonnet或类似高效模型）
+ * @returns 配置好的Librarian代理，包含多源搜索能力和只读限制
+ * 
+ * 配置特点：
+ * - 温度0.1：确保搜索结果的一致性
+ * - 只读限制：禁用write/edit/task/delegate_task/call_omo_agent
+ * - 多工具集成：Context7, gh CLI, grep.app, websearch
+ * - 并行执行：支持同时调用多个搜索工具
+ * - 证据驱动：所有声明必须附带源链接
+ */
 

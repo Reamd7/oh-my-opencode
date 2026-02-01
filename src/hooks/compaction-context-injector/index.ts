@@ -1,3 +1,32 @@
+/**
+ * 压缩上下文注入钩子 (Compaction Context Injector Hook)
+ * 
+ * 在会话上下文压缩（summarize）时注入结构化提示，确保压缩后的摘要包含关键信息。
+ * 这使得代理在上下文窗口满时能够保留重要的工作状态和决策历史。
+ * 
+ * Injects structured prompt during session context compaction (summarize) to
+ * ensure compressed summary contains critical information. This enables agent
+ * to preserve important work state and decision history when context window is full.
+ * 
+ * 注入的摘要结构 (Injected summary structure):
+ * 1. User Requests - 用户原始请求 (Original user requests as-is)
+ * 2. Final Goal - 最终目标 (Ultimate goal and expected deliverable)
+ * 3. Work Completed - 已完成工作 (Files modified, features implemented)
+ * 4. Remaining Tasks - 剩余任务 (Pending items and follow-ups)
+ * 5. Active Working Context - 活跃工作上下文 (Files, code, references, state)
+ * 6. MUST NOT Do - 关键约束 (Forbidden approaches, failed attempts)
+ * 7. Agent Verification State - 代理验证状态 (Review progress, rejections)
+ * 
+ * 触发时机 (Trigger timing):
+ * - 上下文窗口使用率达到阈值时 (When context window usage reaches threshold)
+ * - OpenCode 自动触发 summarize 操作 (OpenCode automatically triggers summarize)
+ * 
+ * 重要性 (Importance):
+ * - 防止压缩后丢失关键决策和约束 (Prevent loss of critical decisions and constraints)
+ * - 保持审查代理的验证状态连续性 (Maintain reviewer agent verification continuity)
+ * - 确保工作可以无缝恢复 (Ensure work can resume seamlessly)
+ */
+
 import { injectHookMessage } from "../../features/hook-message-injector"
 import { log } from "../../shared/logger"
 import { createSystemDirective, SystemDirectiveTypes } from "../../shared/system-directive"
@@ -57,10 +86,17 @@ This section is CRITICAL for reviewer agents (momus, oracle) to maintain continu
 This context is critical for maintaining continuity after compaction.
 `
 
+/**
+ * 创建压缩上下文注入器
+ * Creates compaction context injector
+ * 
+ * @returns 异步函数，在 summarize 时注入上下文提示 (Async function that injects context prompt during summarize)
+ */
 export function createCompactionContextInjector() {
   return async (ctx: SummarizeContext): Promise<void> => {
     log("[compaction-context-injector] injecting context", { sessionID: ctx.sessionID })
 
+    // 注入结构化摘要提示到消息历史 (Inject structured summary prompt into message history)
     const success = injectHookMessage(ctx.sessionID, SUMMARIZE_CONTEXT_PROMPT, {
       agent: "general",
       model: { providerID: ctx.providerID, modelID: ctx.modelID },

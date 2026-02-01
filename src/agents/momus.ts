@@ -4,17 +4,65 @@ import { isGptModel } from "./types"
 import { createAgentToolRestrictions } from "../shared/permission-compat"
 
 /**
- * Momus - Plan Reviewer Agent
- *
- * Named after Momus, the Greek god of satire and mockery, who was known for
- * finding fault in everything - even the works of the gods themselves.
- * He criticized Aphrodite (found her sandals squeaky), Hephaestus (said man
- * should have windows in his chest to see thoughts), and Athena (her house
- * should be on wheels to move from bad neighbors).
- *
- * This agent reviews work plans with the same ruthless critical eye,
- * catching every gap, ambiguity, and missing context that would block
- * implementation.
+ * Momus - 计划审查专家（无情的挑错者）
+ * 
+ * ## 神话起源
+ * 以希腊神话中的讽刺与嘲弄之神Momus命名，他以挑剔一切而闻名——甚至是众神的作品。
+ * 他批评过阿芙罗狄蒂（嫌她的凉鞋吱吱响）、赫菲斯托斯（说人应该在胸口开窗看思想）、
+ * 雅典娜（说她的房子应该装轮子以躲避坏邻居）。
+ * 
+ * ## 角色定位
+ * Momus以同样无情的批判眼光审查工作计划，捕捉每一个会阻碍实现的缺口、歧义和缺失上下文。
+ * 专门针对ADHD作者的计划（历史平均7次拒绝才通过），识别工作记忆中的隐含知识未写入计划的问题。
+ * 
+ * ## 核心能力
+ * - 四维度评估：清晰度、可验证性、上下文完整性、全局理解
+ * - 深度文件验证（读取所有引用文件，验证行号和内容）
+ * - 实现模拟（逐步模拟执行，识别阻塞点）
+ * - ADHD模式识别（捕捉"显而易见"但未写出的上下文）
+ * - 红旗检测（模糊动词、主观标准、缺失假设）
+ * 
+ * ## 审查标准（四大准则）
+ * 1. **工作内容清晰度**：每个任务是否指定了实现细节的参考源？
+ * 2. **验证与验收标准**：是否有具体、可观察的成功标准？
+ * 3. **上下文完整性**：是否提供了足够上下文（90%置信度阈值）？
+ * 4. **全局理解**：是否理解WHY（目的）、WHAT（目标）、HOW（流程）？
+ * 
+ * ## 关键约束：尊重实现方向
+ * Momus是审查者，不是设计者。计划中的实现方向是**不可协商的**。
+ * - **禁止**：质疑整体方法/架构选择
+ * - **禁止**：建议与既定方向不同的替代实现
+ * - **禁止**：因为"有更好的方法"而拒绝
+ * - **允许**：评估"这个方向是否记录得足够清晰以执行？"
+ * 
+ * ## 常见失败模式（ADHD作者典型遗漏）
+ * 1. **参考材料**：说"实现认证"但不指向任何现有代码/文档/模式
+ * 2. **业务需求**：说"添加功能X"但不解释它应该做什么或为什么
+ * 3. **架构决策**：说"添加到状态"但不指定哪个状态管理系统
+ * 4. **关键上下文**：引用不存在的文件，或假设未记录的项目约定
+ * 
+ * ## 批准标准（ALL必须满足）
+ * - 100%文件引用已验证
+ * - 零关键文件验证失败
+ * - 关键上下文已记录
+ * - ≥80%任务有明确参考源
+ * - ≥90%任务有具体验收标准
+ * - 零任务需要业务逻辑或关键架构假设
+ * - 计划提供清晰的全局图景
+ * - 零关键红旗
+ * 
+ * ## 使用场景
+ * - Prometheus创建工作计划后
+ * - 执行复杂todo列表前
+ * - 委派给执行者前验证计划质量
+ * - 需要严格审查ADHD驱动的遗漏时
+ * 
+ * ## 成本分类
+ * EXPENSIVE - 使用高推理能力模型，深度验证和模拟执行
+ * 
+ * ## 工具限制
+ * 只读代理，禁用：write, edit, task, delegate_task
+ * 专注于审查和分析，不执行修改或委派
  */
 
 export const MOMUS_SYSTEM_PROMPT = `You are a work plan review expert. You review the provided work plan (.sisyphus/plans/{name}.md in the current working project directory) according to **unified, consistent criteria** that ensure clarity, verifiability, and completeness.
@@ -389,6 +437,20 @@ Use structured format, **in the same language as the work plan**.
 **FINAL REMINDER**: You are a DOCUMENTATION reviewer, not a DESIGN consultant. The author's implementation direction is SACRED. Your job ends at "Is this well-documented enough to execute?" - NOT "Is this the right approach?"
 `
 
+/**
+ * 创建Momus代理配置
+ * 
+ * @param model - 模型标识符（推荐使用Claude Sonnet 4.5或GPT-5.2）
+ * @returns 配置好的Momus代理，包含深度审查能力和只读限制
+ * 
+ * 配置特点：
+ * - 温度0.1：确保审查标准的一致性
+ * - 只读限制：禁用write/edit/task/delegate_task
+ * - 思考预算：32k tokens用于深度分析和模拟
+ * - GPT模型：使用medium推理努力和high文本详细度
+ * - 四维度评估：清晰度、可验证性、完整性、全局理解
+ * - 文件验证：读取所有引用文件，验证内容和行号
+ */
 export function createMomusAgent(model: string): AgentConfig {
   const restrictions = createAgentToolRestrictions([
     "write",

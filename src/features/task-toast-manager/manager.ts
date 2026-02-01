@@ -4,6 +4,11 @@ import type { ConcurrencyManager } from "../background-agent/concurrency"
 
 type OpencodeClient = PluginInput["client"]
 
+/**
+ * 任务通知管理器
+ * 
+ * 管理所有后台任务的UI通知，提供实时状态可视化
+ */
 export class TaskToastManager {
   private tasks: Map<string, TrackedTask> = new Map()
   private client: OpencodeClient
@@ -45,7 +50,10 @@ export class TaskToastManager {
   }
 
   /**
-   * Update task status
+   * 更新任务状态
+   * 
+   * @param id 任务ID
+   * @param status 新状态 (running/queued/completed/error)
    */
   updateTask(id: string, status: TaskStatus): void {
     const task = this.tasks.get(id)
@@ -55,14 +63,18 @@ export class TaskToastManager {
   }
 
   /**
-   * Remove completed/error task
+   * 移除已完成或错误的任务
+   * 
+   * @param id 任务ID
    */
   removeTask(id: string): void {
     this.tasks.delete(id)
   }
 
   /**
-   * Get all running tasks (newest first)
+   * 获取所有运行中的任务（最新的在前）
+   * 
+   * @returns 运行中任务列表
    */
   getRunningTasks(): TrackedTask[] {
     const running = Array.from(this.tasks.values())
@@ -72,7 +84,9 @@ export class TaskToastManager {
   }
 
   /**
-   * Get all queued tasks
+   * 获取所有排队中的任务
+   * 
+   * @returns 排队任务列表（按启动时间排序）
    */
   getQueuedTasks(): TrackedTask[] {
     return Array.from(this.tasks.values())
@@ -81,7 +95,15 @@ export class TaskToastManager {
   }
 
   /**
-   * Format duration since task started
+   * 格式化任务运行时长
+   * 
+   * 格式: 
+   * - <60s: "Xs"
+   * - <60m: "Xm Ys"
+   * - >=60m: "Xh Ym"
+   * 
+   * @param startedAt 任务启动时间
+   * @returns 格式化的时长字符串
    */
   private formatDuration(startedAt: Date): string {
     const seconds = Math.floor((Date.now() - startedAt.getTime()) / 1000)
@@ -150,7 +172,12 @@ export class TaskToastManager {
   }
 
   /**
-   * Show consolidated toast with all running/queued tasks
+   * 显示任务列表通知
+   * 
+   * 合并显示所有运行中和排队中的任务，
+   * 高亮标记新添加的任务
+   * 
+   * @param newTask 新添加的任务
    */
   private showTaskListToast(newTask: TrackedTask): void {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -176,7 +203,11 @@ export class TaskToastManager {
   }
 
   /**
-   * Show task completion toast
+   * 显示任务完成通知
+   * 
+   * 显示完成时长和剩余任务数量
+   * 
+   * @param task 完成的任务信息
    */
   showCompletionToast(task: { id: string; description: string; duration: string }): void {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

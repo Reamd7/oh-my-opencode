@@ -1,3 +1,30 @@
+/**
+ * Claude Code 命令加载器
+ * 
+ * ## 功能
+ * 从多个目录加载自定义命令，支持嵌套目录和命名空间
+ * 
+ * ## 命令格式
+ * 支持Claude Code的命令模板格式（Markdown + YAML frontmatter）
+ * 
+ * ## 加载优先级（从高到低）
+ * 1. .opencode/command/ (OpenCode项目级)
+ * 2. ~/.config/opencode/command/ (OpenCode用户级)
+ * 3. .claude/commands/ (Claude Code项目级)
+ * 4. ~/.claude/commands/ (Claude Code用户级)
+ * 
+ * ## 命令模板
+ * ```markdown
+ * ---
+ * description: Command description
+ * agent: agent-name
+ * model: provider/model-name
+ * ---
+ * 
+ * Command template with $ARGUMENTS placeholder
+ * ```
+ */
+
 import { promises as fs, type Dirent } from "fs"
 import { join, basename } from "path"
 import { parseFrontmatter } from "../../shared/frontmatter"
@@ -62,6 +89,7 @@ async function loadCommandsFromDir(
       const content = await fs.readFile(commandPath, "utf-8")
       const { data, body } = parseFrontmatter<CommandFrontmatter>(content)
 
+      // 包装命令模板，将用户参数注入到 $ARGUMENTS 占位符
       const wrappedTemplate = `<command-instruction>
 ${body.trim()}
 </command-instruction>
@@ -70,8 +98,10 @@ ${body.trim()}
 $ARGUMENTS
 </user-request>`
 
+      // 添加作用域标识，便于区分命令来源
       const formattedDescription = `(${scope}) ${data.description || ""}`
 
+      // 根据来源清理模型字段格式
       const isOpencodeSource = scope === "opencode" || scope === "opencode-project"
       const definition: CommandDefinition = {
         name: commandName,

@@ -3,12 +3,28 @@ import { join } from "node:path"
 import { MESSAGE_STORAGE, PART_STORAGE } from "./constants"
 import type { MessageMeta, OriginalMessageContext, TextPart, ToolPermission } from "./types"
 
+/**
+ * 存储的消息元数据
+ * 
+ * 用于从历史消息中提取agent/model/tools信息，
+ * 当钩子注入消息时缺少这些字段时作为回退值
+ */
 export interface StoredMessage {
   agent?: string
   model?: { providerID?: string; modelID?: string; variant?: string }
   tools?: Record<string, ToolPermission>
 }
 
+/**
+ * 查找最近的包含完整字段的消息
+ * 
+ * 两阶段查找策略：
+ * 1. 优先查找包含agent+model的完整消息
+ * 2. 回退到包含任一字段的消息
+ * 
+ * @param messageDir 消息目录路径
+ * @returns 找到的消息元数据，未找到返回null
+ */
 export function findNearestMessageWithFields(messageDir: string): StoredMessage | null {
   try {
     const files = readdirSync(messageDir)
@@ -49,10 +65,13 @@ export function findNearestMessageWithFields(messageDir: string): StoredMessage 
 }
 
 /**
- * Finds the FIRST (oldest) message in the session with agent field.
- * This is used to get the original agent that started the session,
- * avoiding issues where newer messages may have a different agent
- * due to OpenCode's internal agent switching.
+ * 查找会话中第一条包含agent字段的消息
+ * 
+ * 用于获取启动会话的原始代理，避免因OpenCode内部代理切换
+ * 导致的代理识别错误
+ * 
+ * @param messageDir 消息目录路径
+ * @returns 原始代理名称，未找到返回null
  */
 export function findFirstMessageWithAgent(messageDir: string): string | null {
   try {
@@ -77,18 +96,37 @@ export function findFirstMessageWithAgent(messageDir: string): string | null {
   return null
 }
 
+/**
+ * 生成唯一消息ID
+ * 格式: msg_{timestamp_hex}{random_base36}
+ */
 function generateMessageId(): string {
   const timestamp = Date.now().toString(16)
   const random = Math.random().toString(36).substring(2, 14)
   return `msg_${timestamp}${random}`
 }
 
+/**
+ * 生成唯一部件ID
+ * 格式: prt_{timestamp_hex}{random_base36}
+ */
 function generatePartId(): string {
   const timestamp = Date.now().toString(16)
   const random = Math.random().toString(36).substring(2, 10)
   return `prt_${timestamp}${random}`
 }
 
+/**
+ * 获取或创建消息存储目录
+ * 
+ * 查找策略：
+ * 1. 直接路径: MESSAGE_STORAGE/{sessionID}
+ * 2. 嵌套路径: MESSAGE_STORAGE/*\/{sessionID}
+ * 3. 不存在则创建直接路径
+ * 
+ * @param sessionID 会话ID
+ * @returns 消息目录路径
+ */
 function getOrCreateMessageDir(sessionID: string): string {
   if (!existsSync(MESSAGE_STORAGE)) {
     mkdirSync(MESSAGE_STORAGE, { recursive: true })
@@ -110,12 +148,31 @@ function getOrCreateMessageDir(sessionID: string): string {
   return directPath
 }
 
+/**
+ * 注入钩子消息到OpenCode消息流
+ * 
+ * ## 工作流程
+ * 1. 验证内容非空
+ * 2. 从原始消息或历史消息继承元数据
+ * 3. 生成消息ID和部件ID
+ * 4. 原子写入消息元数据和文本部件
+ * 
+ * ## 元数据继承优先级
+ * - agent: originalMessage.agent > fallback.agent > "general"
+ * - model: originalMessage.model > fallback.model > undefined
+ * - tools: originalMessage.tools > fallback.tools > undefined
+ * 
+ * @param sessionID 会话ID
+ * @param hookContent 钩子消息内容
+ * @param originalMessage 原始消息上下文
+ * @returns 注入成功返回true，失败返回false
+ */
 export function injectHookMessage(
   sessionID: string,
   hookContent: string,
   originalMessage: OriginalMessageContext
 ): boolean {
-  // Validate hook content to prevent empty message injection
+  // 验证钩子内容，防止注入空消息
   if (!hookContent || hookContent.trim().length === 0) {
     console.warn("[hook-message-injector] Attempted to inject empty hook content, skipping injection", {
       sessionID,

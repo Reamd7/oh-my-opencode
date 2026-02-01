@@ -1,3 +1,42 @@
+/**
+ * Ralph Loop - 自引用开发循环钩子
+ * 
+ * ## 功能概述
+ * Ralph Loop是一个自我完善的开发循环，允许AI代理持续工作直到任务完全完成。
+ * 这是实现"ultrawork"模式的核心机制。
+ * 
+ * ## 核心概念
+ * "Ralph"代表"递归自我完善循环"（Recursive Auto-improving Loop, Perpetual Helper）
+ * 系统会持续迭代直到所有验证通过，确保任务真正完成而不是半途而废。
+ * 
+ * ## 工作流程
+ * 1. 代理执行任务
+ * 2. 会话进入空闲状态（session.idle事件）
+ * 3. 检测完成标记（completion promise）
+ * 4. 如果未完成 → 注入继续提示 → 返回步骤1
+ * 5. 如果完成 → 清理状态 → 显示成功通知
+ * 
+ * ## 完成检测机制
+ * - 在transcript文件中搜索 `<promise>DONE</promise>` 标记
+ * - 通过Session Messages API检查最后一条助手消息
+ * - 双重检测确保可靠性（文件优先，API作为后备）
+ * 
+ * ## 安全防护机制
+ * - 最大迭代次数限制（默认100次）
+ * - 会话恢复状态跟踪（避免在错误恢复期间触发）
+ * - 孤立会话清理（删除已不存在会话的状态）
+ * - 用户中断检测（MessageAbortedError）
+ * 
+ * ## 状态持久化
+ * 状态存储在 `.sisyphus/ralph-loop.local.md` 文件中，包含：
+ * - 当前迭代次数
+ * - 最大迭代限制
+ * - 完成标记字符串
+ * - 原始任务提示
+ * - 会话ID
+ * - ultrawork模式标志
+ */
+
 import type { PluginInput } from "@opencode-ai/plugin"
 import { existsSync, readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
@@ -99,9 +138,11 @@ export function createRalphLoopHook(
       if (!existsSync(transcriptPath)) return false
 
       const content = readFileSync(transcriptPath, "utf-8")
+      // 构建正则：匹配 <promise>DONE</promise>（允许空白）
       const pattern = new RegExp(`<promise>\\s*${escapeRegex(promise)}\\s*</promise>`, "is")
       const lines = content.split("\n").filter(l => l.trim())
 
+      // 逐行解析JSONL格式的transcript，跳过用户消息
       for (const line of lines) {
         try {
           const entry = JSON.parse(line)
@@ -210,10 +251,12 @@ export function createRalphLoopHook(
   }): Promise<void> => {
     const props = event.properties as Record<string, unknown> | undefined
 
+    // 核心循环逻辑：会话空闲时检查完成状态并决定是否继续
     if (event.type === "session.idle") {
       const sessionID = props?.sessionID as string | undefined
       if (!sessionID) return
 
+      // 防护：跳过正在错误恢复中的会话
       const sessionState = getSessionState(sessionID)
       if (sessionState.isRecovering) {
         log(`[${HOOK_NAME}] Skipped: in recovery`, { sessionID })
@@ -225,6 +268,7 @@ export function createRalphLoopHook(
         return
       }
 
+      // 防护：清理孤立会话状态（原会话已被删除）
       if (state.session_id && state.session_id !== sessionID) {
         if (checkSessionExists) {
           try {
@@ -247,6 +291,7 @@ export function createRalphLoopHook(
         return
       }
 
+      // 完成检测：双重检查机制（文件优先，API后备）
       const transcriptPath = getTranscriptPath(sessionID)
       const completionDetectedViaTranscript = detectCompletionPromise(transcriptPath, state.completion_promise)
 
@@ -254,6 +299,7 @@ export function createRalphLoopHook(
         ? false
         : await detectCompletionInSessionMessages(sessionID, state.completion_promise)
 
+      // 退出条件1：检测到完成标记
       if (completionDetectedViaTranscript || completionDetectedViaApi) {
         log(`[${HOOK_NAME}] Completion detected!`, {
           sessionID,
@@ -284,6 +330,7 @@ export function createRalphLoopHook(
         return
       }
 
+      // 退出条件2：达到最大迭代次数
       if (state.iteration >= state.max_iterations) {
         log(`[${HOOK_NAME}] Max iterations reached`, {
           sessionID,
@@ -306,6 +353,7 @@ export function createRalphLoopHook(
         return
       }
 
+      // 继续循环：递增迭代计数并注入继续提示
       const newState = incrementIteration(ctx.directory, stateDir)
       if (!newState) {
         log(`[${HOOK_NAME}] Failed to increment iteration`, { sessionID })
@@ -339,6 +387,7 @@ export function createRalphLoopHook(
         .catch(() => {})
 
       try {
+        // 保持代理和模型一致性：从历史消息中提取
         let agent: string | undefined
         let model: { providerID: string; modelID: string } | undefined
 
@@ -381,6 +430,7 @@ export function createRalphLoopHook(
       }
     }
 
+    // 清理：会话删除时清除对应状态
     if (event.type === "session.deleted") {
       const sessionInfo = props?.info as { id?: string } | undefined
       if (sessionInfo?.id) {
@@ -393,6 +443,7 @@ export function createRalphLoopHook(
       }
     }
 
+    // 错误处理：用户中断时清除状态，其他错误标记为恢复中
     if (event.type === "session.error") {
       const sessionID = props?.sessionID as string | undefined
       const error = props?.error as { name?: string } | undefined

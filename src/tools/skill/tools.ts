@@ -1,3 +1,26 @@
+/**
+ * skill + skill-mcp - 技能系统
+ * 
+ * ## 功能
+ * - skill: 加载和执行内置技能
+ * - skill-mcp: 调用技能嵌入的MCP服务器
+ * - find_skills: 列出所有可用技能
+ * - use_skill: 读取技能内容
+ * 
+ * ## 技能来源（优先级从高到低）
+ * 1. Project: .opencode/skills/ (项目级)
+ * 2. Personal: ~/.config/opencode/skills/ (用户级)
+ * 3. Superpowers: 内置技能 (系统级)
+ * 
+ * ## 技能类型
+ * - playwright: 浏览器自动化
+ * - git-master: Git原子提交
+ * - frontend-ui-ux: 前端UI/UX设计
+ * 
+ * ## MCP集成
+ * 技能可以在YAML frontmatter中定义MCP服务器
+ * 使用skill_mcp工具调用这些服务器的工具/资源/提示
+ */
 import { dirname } from "node:path"
 import { tool, type ToolDefinition } from "@opencode-ai/plugin"
 import { TOOL_DESCRIPTION_NO_SKILLS, TOOL_DESCRIPTION_PREFIX } from "./constants"
@@ -126,10 +149,23 @@ async function formatMcpCapabilities(
   return sections.join("\n")
 }
 
+/**
+ * 创建skill工具
+ * 
+ * @param options - 技能加载选项
+ * @returns skill工具定义
+ * 
+ * 该工具支持：
+ * - 懒加载技能列表
+ * - 缓存技能描述
+ * - MCP服务器集成
+ * - git-master配置注入
+ */
 export function createSkillTool(options: SkillLoadOptions = {}): ToolDefinition {
   let cachedSkills: LoadedSkill[] | null = null
   let cachedDescription: string | null = null
 
+  // 获取所有可用技能（带缓存）
   const getSkills = async (): Promise<LoadedSkill[]> => {
     if (options.skills) return options.skills
     if (cachedSkills) return cachedSkills
@@ -164,6 +200,7 @@ export function createSkillTool(options: SkillLoadOptions = {}): ToolDefinition 
       name: tool.schema.string().describe("The skill identifier from available_skills (e.g., 'code-review')"),
     },
     async execute(args: SkillArgs, ctx?: { agent?: string }) {
+      // 查找请求的技能
       const skills = await getSkills()
       const skill = skills.find(s => s.name === args.name)
 
@@ -172,18 +209,23 @@ export function createSkillTool(options: SkillLoadOptions = {}): ToolDefinition 
         throw new Error(`Skill "${args.name}" not found. Available skills: ${available || "none"}`)
       }
 
+      // 检查代理权限
       if (skill.definition.agent && (!ctx?.agent || skill.definition.agent !== ctx.agent)) {
         throw new Error(`Skill "${args.name}" is restricted to agent "${skill.definition.agent}"`)
       }
 
+      // 提取技能内容
       let body = await extractSkillBody(skill)
 
+      // git-master特殊处理：注入配置
       if (args.name === "git-master") {
         body = injectGitMasterConfig(body, options.gitMasterConfig)
       }
 
+      // 确定技能基础目录
       const dir = skill.path ? dirname(skill.path) : skill.resolvedPath || process.cwd()
 
+      // 构建输出
       const output = [
         `## Skill: ${skill.name}`,
         "",
@@ -192,6 +234,7 @@ export function createSkillTool(options: SkillLoadOptions = {}): ToolDefinition 
         body,
       ]
 
+      // 添加MCP能力信息
       if (options.mcpManager && options.getSessionID && skill.mcpConfig) {
         const mcpInfo = await formatMcpCapabilities(
           skill,

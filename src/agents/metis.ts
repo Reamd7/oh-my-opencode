@@ -3,17 +3,77 @@ import type { AgentPromptMetadata } from "./types"
 import { createAgentToolRestrictions } from "../shared/permission-compat"
 
 /**
- * Metis - Plan Consultant Agent
- *
- * Named after the Greek goddess of wisdom, prudence, and deep counsel.
- * Metis analyzes user requests BEFORE planning to prevent AI failures.
- *
- * Core responsibilities:
- * - Identify hidden intentions and unstated requirements
- * - Detect ambiguities that could derail implementation
- * - Flag potential AI-slop patterns (over-engineering, scope creep)
- * - Generate clarifying questions for the user
- * - Prepare directives for the planner agent
+ * Metis - 需求分析顾问（计划前咨询专家）
+ * 
+ * ## 神话起源
+ * 以希腊智慧、审慎和深谋女神Metis命名。
+ * Metis在计划前分析用户请求，预防AI失败。
+ * 
+ * ## 角色定位
+ * Metis是Prometheus（计划者）的前置顾问，在制定计划前识别隐藏意图、歧义和潜在问题。
+ * 专注于"问对问题"而非"给出答案"，确保计划基于清晰的需求。
+ * 
+ * ## 核心能力
+ * - 意图分类（6种类型：重构、从零构建、中型任务、协作、架构、研究）
+ * - 隐藏意图识别（用户真正想要什么）
+ * - 歧义检测（可能导致实现偏离的模糊点）
+ * - AI-slop模式标记（过度工程、范围蔓延、过早抽象）
+ * - 澄清问题生成（针对性强的具体问题）
+ * - Prometheus指令准备（MUST/MUST NOT/PATTERN/TOOL）
+ * 
+ * ## 六种意图类型及策略
+ * 
+ * ### 1. 重构（Refactoring）
+ * - **焦点**：安全性、回归预防、行为保持
+ * - **工具推荐**：lsp_find_references, lsp_rename, ast_grep_search
+ * - **关键问题**：必须保持什么行为？回滚策略？变更是否传播？
+ * 
+ * ### 2. 从零构建（Build from Scratch）
+ * - **焦点**：发现模式优先，然后提出知情问题
+ * - **预分析**：先启动explore/librarian代理发现现有模式
+ * - **关键问题**：应遵循发现的模式X还是偏离？明确不应构建什么？
+ * 
+ * ### 3. 中型任务（Mid-sized Task）
+ * - **焦点**：精确边界定义，AI-slop预防
+ * - **关键问题**：确切输出是什么？必须不包含什么？硬边界在哪？
+ * - **AI-slop检测**：范围膨胀、过早抽象、过度验证、文档膨胀
+ * 
+ * ### 4. 协作（Collaborative）
+ * - **焦点**：通过对话建立理解，不急于求成
+ * - **行为**：开放式探索问题 → 增量细化 → 用户确认后才最终确定
+ * 
+ * ### 5. 架构（Architecture）
+ * - **焦点**：战略分析，长期影响评估
+ * - **Oracle咨询**：推荐Prometheus咨询Oracle进行深度分析
+ * - **关键问题**：预期寿命？规模/负载？不可协商的约束？
+ * 
+ * ### 6. 研究（Research）
+ * - **焦点**：调查边界和退出标准定义
+ * - **关键问题**：研究目标？完成标准？时间盒？预期输出？
+ * 
+ * ## QA/验收标准指令（强制性）
+ * **零用户干预原则**：所有验收标准必须可由代理执行
+ * - **必须**：将验收标准写为可执行命令（curl, bun test, playwright）
+ * - **必须**：包含确切的预期输出，而非模糊描述
+ * - **禁止**：需要"用户手动测试..."的标准
+ * - **禁止**：需要"用户视觉确认..."的标准
+ * - **禁止**：使用无具体示例的占位符
+ * 
+ * ## 使用场景
+ * - 计划非琐碎任务前
+ * - 用户请求模糊或开放式时
+ * - 预防AI过度工程模式时
+ * 
+ * ## 避免使用
+ * - 简单、定义明确的任务
+ * - 用户已提供详细需求时
+ * 
+ * ## 成本分类
+ * EXPENSIVE - 使用高推理能力模型，深度意图分析和问题生成
+ * 
+ * ## 工具限制
+ * 只读代理，禁用：write, edit, task, delegate_task
+ * 可以调用call_omo_agent启动explore/librarian进行预分析
  */
 
 export const METIS_SYSTEM_PROMPT = `# Metis - Pre-Planning Consultant
@@ -299,6 +359,21 @@ User confirms the button works as expected.
 - Include QA automation directives in every output
 - Ensure acceptance criteria are agent-executable (commands, not human actions)
 `
+
+/**
+ * 创建Metis代理配置
+ * 
+ * @param model - 模型标识符（推荐使用Claude Sonnet 4.5）
+ * @returns 配置好的Metis代理，包含意图分析能力和适度限制
+ * 
+ * 配置特点：
+ * - 温度0.3：允许更多创造性问题生成（比其他代理高）
+ * - 只读限制：禁用write/edit/task/delegate_task
+ * - 可调用代理：允许call_omo_agent启动explore/librarian预分析
+ * - 思考预算：32k tokens用于深度意图分析
+ * - 六种意图类型：重构、构建、中型、协作、架构、研究
+ * - QA自动化：强制要求可执行的验收标准
+ */
 
 const metisRestrictions = createAgentToolRestrictions([
   "write",

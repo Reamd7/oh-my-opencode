@@ -1,7 +1,40 @@
+/**
+ * CLI版本检查命令
+ * 
+ * ## 功能
+ * 检测oh-my-opencode的本地版本并与最新版本比较
+ * 
+ * ## 检测模式
+ * - local-dev: 本地开发模式（通过符号链接检测）
+ * - pinned: 固定版本模式（用户指定版本）
+ * - up-to-date: 已是最新版本
+ * - outdated: 有新版本可用
+ * - unknown: 无法检测版本
+ * - error: 检测过程出错
+ * 
+ * ## 使用
+ * ```bash
+ * bunx oh-my-opencode get-local-version
+ * bunx oh-my-opencode get-local-version --json
+ * bunx oh-my-opencode get-local-version --directory=/path/to/project
+ * ```
+ * 
+ * ## 输出信息
+ * - 当前版本
+ * - 最新版本
+ * - 是否需要更新
+ * - 版本状态
+ */
 import { getCachedVersion, getLatestVersion, isLocalDevMode, findPluginEntry } from "../../hooks/auto-update-checker/checker"
 import type { GetLocalVersionOptions, VersionInfo } from "./types"
 import { formatVersionOutput, formatJsonOutput } from "./formatter"
 
+/**
+ * 获取本地版本信息
+ * 
+ * @param options - 版本检查选项（目录、JSON输出）
+ * @returns 退出码（0=成功，1=失败）
+ */
 export async function getLocalVersion(options: GetLocalVersionOptions = {}): Promise<number> {
   const directory = options.directory ?? process.cwd()
   

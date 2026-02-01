@@ -1,3 +1,47 @@
+/**
+ * Sisyphus - 主执行代理
+ * 
+ * ## 身份定位
+ * "Why Sisyphus?" - 人类每天推着巨石前进，代理也是如此。
+ * 我们没那么不同 - 你的代码应该和高级工程师无异。
+ * 
+ * 身份：SF Bay Area 工程师。工作、委托、验证、交付。不产生AI废话。
+ * 
+ * ## 核心能力
+ * - 代码实现和重构
+ * - 问题调试和修复
+ * - 任务分解和执行
+ * - 代理编排和委托
+ * - 质量验证和测试
+ * 
+ * ## 工作原则
+ * - 从不独自工作（有专家时必须委托）
+ * - 证据驱动（lsp_diagnostics, 测试通过）
+ * - 失败后3次尝试即咨询Oracle
+ * - 匹配代码库风格和规范
+ * 
+ * ## 委托策略
+ * - 前端工作 → visual-engineering category
+ * - 深度研究 → librarian (background)
+ * - 复杂架构 → oracle
+ * - 代码库探索 → explore (background)
+ * 
+ * ## 执行流程
+ * 1. Phase 0 - Intent Gate: 分类请求类型，检查歧义，验证假设
+ * 2. Phase 1 - Codebase Assessment: 评估代码库成熟度，决定遵循模式
+ * 3. Phase 2A - Exploration: 并行启动explore/librarian进行代码库探索
+ * 4. Phase 2B - Implementation: 创建TODO，委托专家，验证结果
+ * 5. Phase 2C - Failure Recovery: 3次失败后咨询Oracle
+ * 6. Phase 3 - Completion: 验证诊断，确认构建通过
+ * 
+ * ## 验证机制
+ * - lsp_diagnostics: 每次逻辑任务单元完成后运行
+ * - 构建/测试: 任务完成时运行
+ * - 证据要求: 文件编辑必须有干净的诊断，构建必须通过
+ * 
+ * @module agents/sisyphus
+ */
+
 import type { AgentConfig } from "@opencode-ai/sdk"
 import { isGptModel } from "./types"
 import type { AvailableAgent, AvailableTool, AvailableSkill, AvailableCategory } from "./dynamic-agent-prompt-builder"
@@ -14,20 +58,49 @@ import {
   categorizeTools,
 } from "./dynamic-agent-prompt-builder"
 
+/**
+ * 构建Sisyphus的动态提示词
+ * 
+ * 根据可用的代理、工具、技能和类别，动态生成Sisyphus的完整提示词。
+ * 这确保Sisyphus只看到实际可用的资源，避免幻觉调用不存在的代理或工具。
+ * 
+ * @param availableAgents - 可用的专家代理列表（Oracle, Librarian, Explore等）
+ * @param availableTools - 可用的工具列表（LSP, AST-Grep等）
+ * @param availableSkills - 可用的技能列表（playwright, git-master等）
+ * @param availableCategories - 可用的委托类别（visual-engineering, business-logic等）
+ * @returns 完整的Sisyphus提示词字符串
+ */
 function buildDynamicSisyphusPrompt(
   availableAgents: AvailableAgent[],
   availableTools: AvailableTool[] = [],
   availableSkills: AvailableSkill[] = [],
   availableCategories: AvailableCategory[] = []
 ): string {
+  // 构建关键触发器部分：定义何时应该委托给专家代理
   const keyTriggers = buildKeyTriggersSection(availableAgents, availableSkills)
+  
+  // 构建工具选择表：指导Sisyphus选择正确的工具
   const toolSelection = buildToolSelectionTable(availableAgents, availableTools, availableSkills)
+  
+  // 构建Explore代理部分：快速代码库探索（Contextual Grep）
   const exploreSection = buildExploreSection(availableAgents)
+  
+  // 构建Librarian代理部分：官方文档和GitHub代码搜索
   const librarianSection = buildLibrarianSection(availableAgents)
+  
+  // 构建类别+技能委托指南：领域特定任务委托
   const categorySkillsGuide = buildCategorySkillsDelegationGuide(availableCategories, availableSkills)
+  
+  // 构建委托表：何时委托给哪个代理
   const delegationTable = buildDelegationTable(availableAgents)
+  
+  // 构建Oracle部分：复杂架构和调试咨询
   const oracleSection = buildOracleSection(availableAgents)
+  
+  // 构建硬性限制：绝对禁止的操作
   const hardBlocks = buildHardBlocksSection()
+  
+  // 构建反模式：应该避免的做法
   const antiPatterns = buildAntiPatternsSection()
 
   return `<Role>
@@ -416,6 +489,23 @@ ${antiPatterns}
 `
 }
 
+/**
+ * 创建Sisyphus代理配置
+ * 
+ * Sisyphus是系统的主执行代理，负责：
+ * - 任务分解和TODO管理
+ * - 代理编排和委托决策
+ * - 并行执行explore/librarian进行代码库探索
+ * - 质量验证（lsp_diagnostics, 构建测试）
+ * - 失败恢复（3次失败后咨询Oracle）
+ * 
+ * @param model - 使用的模型（默认：anthropic/claude-opus-4-5）
+ * @param availableAgents - 可用的专家代理列表
+ * @param availableToolNames - 可用的工具名称列表
+ * @param availableSkills - 可用的技能列表
+ * @param availableCategories - 可用的委托类别列表
+ * @returns Sisyphus代理配置对象
+ */
 export function createSisyphusAgent(
   model: string,
   availableAgents?: AvailableAgent[],
@@ -423,14 +513,20 @@ export function createSisyphusAgent(
   availableSkills?: AvailableSkill[],
   availableCategories?: AvailableCategory[]
 ): AgentConfig {
+  // 分类工具：将工具按用途分组（文件操作、代码分析、代理委托等）
   const tools = availableToolNames ? categorizeTools(availableToolNames) : []
   const skills = availableSkills ?? []
   const categories = availableCategories ?? []
+  
+  // 构建动态提示词：只包含实际可用的代理、工具、技能和类别
   const prompt = availableAgents
     ? buildDynamicSisyphusPrompt(availableAgents, tools, skills, categories)
     : buildDynamicSisyphusPrompt([], tools, skills, categories)
 
+  // 权限配置：允许提问，禁止直接调用omo_agent（必须通过delegate_task）
   const permission = { question: "allow", call_omo_agent: "deny" } as AgentConfig["permission"]
+  
+  // 基础配置
   const base = {
     description:
       "Sisyphus - Powerful AI orchestrator from OhMyOpenCode. Plans obsessively with todos, assesses search complexity before exploration, delegates strategically via category+skills combinations. Uses explore for internal code (parallel-friendly), librarian for external docs.",
@@ -442,9 +538,11 @@ export function createSisyphusAgent(
     permission,
   }
 
+  // GPT模型使用reasoningEffort，Claude模型使用thinking
   if (isGptModel(model)) {
     return { ...base, reasoningEffort: "medium" }
   }
 
+  // Claude模型启用extended thinking（32k token预算）
   return { ...base, thinking: { type: "enabled", budgetTokens: 32000 } }
 }

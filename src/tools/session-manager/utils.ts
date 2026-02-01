@@ -1,3 +1,11 @@
+/**
+ * utils - 会话工具函数
+ * 
+ * 提供格式化和搜索功能：
+ * - 格式化输出：将会话数据转换为人类可读的格式
+ * - 搜索算法：在消息中执行全文搜索
+ * - 日期过滤：按时间范围筛选会话
+ */
 import type { SessionInfo, SessionMessage, SearchResult } from "./types"
 import { getSessionInfo, readSessionMessages } from "./storage"
 
@@ -146,6 +154,22 @@ export async function filterSessionsByDate(
   return results
 }
 
+/**
+ * 在单个会话中搜索匹配的消息
+ * 
+ * 搜索算法：
+ * 1. 遍历会话的所有消息
+ * 2. 在每条消息的文本部分中查找匹配
+ * 3. 统计匹配次数（使用 split 技巧：split(query).length - 1）
+ * 4. 提取匹配上下文（前后各 50 字符）
+ * 5. 达到结果限制时提前终止
+ * 
+ * @param sessionID - 会话 ID
+ * @param query - 搜索查询字符串
+ * @param caseSensitive - 是否区分大小写（默认 false）
+ * @param maxResults - 最大结果数（可选）
+ * @returns 搜索结果数组，包含匹配的消息和上下文
+ */
 export async function searchInSession(
   sessionID: string,
   query: string,

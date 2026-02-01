@@ -1,3 +1,36 @@
+/**
+ * Claude Code MCP 加载器
+ * 
+ * ## 功能
+ * 处理 .mcp.json 文件，支持环境变量展开和多作用域配置
+ * 
+ * ## 变量展开
+ * 支持 ${VAR} 语法，自动替换为 process.env.VAR
+ * 
+ * ## 加载优先级（从高到低）
+ * 1. .claude/.mcp.json (本地项目级)
+ * 2. .mcp.json (项目级)
+ * 3. ~/.claude/.mcp.json (用户级)
+ * 
+ * ## 配置示例
+ * ```json
+ * {
+ *   "mcpServers": {
+ *     "my-server": {
+ *       "command": "node",
+ *       "args": ["server.js"],
+ *       "env": {
+ *         "PORT": "${PORT}"
+ *       }
+ *     }
+ *   }
+ * }
+ * ```
+ * 
+ * ## 禁用服务器
+ * 设置 "disabled": true 可以在高优先级配置中禁用低优先级的服务器
+ */
+
 import { existsSync, readFileSync } from "fs"
 import { join } from "path"
 import { getClaudeConfigDir } from "../../shared"
@@ -76,6 +109,7 @@ export async function loadMcpConfigs(): Promise<McpLoadResult> {
     if (!config?.mcpServers) continue
 
     for (const [name, serverConfig] of Object.entries(config.mcpServers)) {
+      // 处理禁用标记：高优先级配置可以禁用低优先级的服务器
       if (serverConfig.disabled) {
         log(`Disabling MCP server "${name}"`, { path })
         delete servers[name]
@@ -88,9 +122,11 @@ export async function loadMcpConfigs(): Promise<McpLoadResult> {
       }
 
       try {
+        // 转换 Claude Code 格式到 OpenCode SDK 格式
         const transformed = transformMcpServer(name, serverConfig)
         servers[name] = transformed
 
+        // 覆盖同名服务器（实现优先级机制）
         const existingIndex = loadedServers.findIndex((s) => s.name === name)
         if (existingIndex !== -1) {
           loadedServers.splice(existingIndex, 1)

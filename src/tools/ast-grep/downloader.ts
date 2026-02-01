@@ -4,12 +4,21 @@ import { homedir } from "os"
 import { createRequire } from "module"
 import { extractZip } from "../../shared"
 
+/** AST-grep GitHub仓库 */
 const REPO = "ast-grep/ast-grep"
 
-// IMPORTANT: Update this when bumping @ast-grep/cli in package.json
-// This is only used as fallback when @ast-grep/cli package.json cannot be read
+/**
+ * 默认版本号
+ * 
+ * 重要：更新package.json中的@ast-grep/cli版本时，需同步更新此值
+ * 仅在无法读取@ast-grep/cli的package.json时作为后备
+ */
 const DEFAULT_VERSION = "0.40.0"
 
+/**
+ * 获取AST-grep版本号
+ * 优先从@ast-grep/cli的package.json读取，失败则使用默认版本
+ */
 function getAstGrepVersion(): string {
   try {
     const require = createRequire(import.meta.url)
@@ -20,11 +29,13 @@ function getAstGrepVersion(): string {
   }
 }
 
+/** 平台信息（架构和操作系统） */
 interface PlatformInfo {
-  arch: string
-  os: string
+  arch: string // CPU架构（如aarch64, x86_64）
+  os: string // 操作系统（如apple-darwin, unknown-linux-gnu）
 }
 
+/** 平台到AST-grep二进制文件命名的映射 */
 const PLATFORM_MAP: Record<string, PlatformInfo> = {
   "darwin-arm64": { arch: "aarch64", os: "apple-darwin" },
   "darwin-x64": { arch: "x86_64", os: "apple-darwin" },
@@ -35,6 +46,13 @@ const PLATFORM_MAP: Record<string, PlatformInfo> = {
   "win32-ia32": { arch: "i686", os: "pc-windows-msvc" },
 }
 
+/**
+ * 获取缓存目录
+ * 
+ * 路径规则：
+ * - Windows: %LOCALAPPDATA%\oh-my-opencode\bin
+ * - Unix: $XDG_CACHE_HOME/oh-my-opencode/bin 或 ~/.cache/oh-my-opencode/bin
+ */
 export function getCacheDir(): string {
   if (process.platform === "win32") {
     const localAppData = process.env.LOCALAPPDATA || process.env.APPDATA
@@ -47,10 +65,12 @@ export function getCacheDir(): string {
   return join(base, "oh-my-opencode", "bin")
 }
 
+/** 获取二进制文件名（Windows为sg.exe，其他为sg） */
 export function getBinaryName(): string {
   return process.platform === "win32" ? "sg.exe" : "sg"
 }
 
+/** 获取缓存的二进制文件路径（如果存在） */
 export function getCachedBinaryPath(): string | null {
   const binaryPath = join(getCacheDir(), getBinaryName())
   return existsSync(binaryPath) ? binaryPath : null
@@ -58,6 +78,19 @@ export function getCachedBinaryPath(): string | null {
 
 
 
+/**
+ * 下载AST-grep二进制文件
+ * 
+ * ## 下载流程
+ * 1. 检查缓存是否已存在
+ * 2. 根据平台构建下载URL
+ * 3. 从GitHub Releases下载zip文件
+ * 4. 解压到缓存目录
+ * 5. 设置可执行权限（Unix系统）
+ * 
+ * @param version - 版本号（默认使用DEFAULT_VERSION）
+ * @returns 二进制文件路径，失败返回null
+ */
 export async function downloadAstGrep(version: string = DEFAULT_VERSION): Promise<string | null> {
   const platformKey = `${process.platform}-${process.arch}`
   const platformInfo = PLATFORM_MAP[platformKey]
@@ -117,6 +150,10 @@ export async function downloadAstGrep(version: string = DEFAULT_VERSION): Promis
   }
 }
 
+/**
+ * 确保AST-grep二进制文件可用
+ * 如果缓存中不存在，则自动下载
+ */
 export async function ensureAstGrepBinary(): Promise<string | null> {
   const cachedPath = getCachedBinaryPath()
   if (cachedPath) {

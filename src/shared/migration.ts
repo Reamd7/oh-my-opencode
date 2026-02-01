@@ -1,7 +1,31 @@
+/**
+ * 配置迁移工具
+ * 
+ * 核心功能：
+ * - 自动迁移旧版配置到新版格式
+ * - 向后兼容旧的 agent 名称和 hook 名称
+ * - 自动备份原配置文件
+ * 
+ * 迁移机制：
+ * 1. Agent 名称标准化（OmO → sisyphus）
+ * 2. Hook 名称更新（移除废弃 hooks）
+ * 3. Model 配置迁移到 Category 配置
+ * 4. 自动清理冗余配置
+ * 
+ * 设计理念：
+ * - 零用户干预：自动检测并迁移
+ * - 安全优先：迁移前自动备份
+ * - 向后兼容：保留旧名称映射
+ */
 import * as fs from "fs"
 import { log } from "./logger"
 
-// Migration map: old keys → new keys (for backward compatibility)
+/**
+ * Agent 名称映射表（向后兼容）
+ * 
+ * 将旧版 agent 名称映射到标准化的新名称。
+ * 支持多种历史命名变体（大小写、连字符等）。
+ */
 export const AGENT_NAME_MAP: Record<string, string> = {
   // Sisyphus variants → "sisyphus"
   omo: "sisyphus",
@@ -43,43 +67,45 @@ export const AGENT_NAME_MAP: Record<string, string> = {
   "multimodal-looker": "multimodal-looker",
 }
 
+/** 内置 agent 名称集合（标准化后的名称） */
 export const BUILTIN_AGENT_NAMES = new Set([
-  "sisyphus",           // was "Sisyphus"
+  "sisyphus",
   "oracle",
   "librarian",
   "explore",
   "multimodal-looker",
-  "metis",              // was "Metis (Plan Consultant)"
-  "momus",              // was "Momus (Plan Reviewer)"
-  "prometheus",         // was "Prometheus (Planner)"
-  "atlas",              // was "Atlas"
+  "metis",
+  "momus",
+  "prometheus",
+  "atlas",
   "build",
 ])
 
-// Migration map: old hook names → new hook names (for backward compatibility)
-// null means the hook was removed and should be filtered out from disabled_hooks
+/**
+ * Hook 名称映射表（向后兼容）
+ * 
+ * - 字符串值：旧名称映射到新名称
+ * - null 值：hook 已废弃，将从 disabled_hooks 中移除并警告用户
+ */
 export const HOOK_NAME_MAP: Record<string, string | null> = {
-  // Legacy names (backward compatibility)
   "anthropic-auto-compact": "anthropic-context-window-limit-recovery",
   "sisyphus-orchestrator": "atlas",
-
-  // Removed hooks (v3.0.0) - will be filtered out and user warned
   "preemptive-compaction": null,
   "empty-message-sanitizer": null,
 }
 
 /**
- * @deprecated LEGACY MIGRATION ONLY
+ * Model 到 Category 映射表（遗留迁移专用）
  * 
- * This map exists solely for migrating old configs that used hardcoded model strings.
- * It maps legacy model strings to semantic category names, allowing users to migrate
- * from explicit model configs to category-based configs.
+ * @deprecated 仅用于迁移旧配置，未来版本将移除
  * 
- * DO NOT add new entries here. New agents should use:
- * - Category-based config (preferred): { category: "unspecified-high" }
- * - Or inherit from OpenCode's config.model
+ * 用途：将硬编码的 model 字符串迁移到语义化的 category 配置。
  * 
- * This map will be removed in a future major version once migration period ends.
+ * 新 agent 应使用：
+ * - Category 配置（推荐）：{ category: "unspecified-high" }
+ * - 或继承 OpenCode 的 config.model
+ * 
+ * 请勿添加新条目，此映射表将在迁移期结束后移除。
  */
 export const MODEL_TO_CATEGORY_MAP: Record<string, string> = {
   "google/gemini-3-pro": "visual-engineering",
@@ -90,6 +116,13 @@ export const MODEL_TO_CATEGORY_MAP: Record<string, string> = {
   "anthropic/claude-sonnet-4-5": "unspecified-low",
 }
 
+/**
+ * 迁移 agent 名称
+ * 
+ * 将配置中的旧 agent 名称替换为标准化的新名称。
+ * 
+ * @returns 迁移后的配置和是否发生变更
+ */
 export function migrateAgentNames(agents: Record<string, unknown>): { migrated: Record<string, unknown>; changed: boolean } {
   const migrated: Record<string, unknown> = {}
   let changed = false
@@ -105,6 +138,13 @@ export function migrateAgentNames(agents: Record<string, unknown>): { migrated: 
   return { migrated, changed }
 }
 
+/**
+ * 迁移 hook 名称
+ * 
+ * 更新 hook 名称并移除已废弃的 hooks。
+ * 
+ * @returns 迁移后的 hooks、是否变更、已移除的 hooks
+ */
 export function migrateHookNames(hooks: string[]): { migrated: string[]; changed: boolean; removed: string[] } {
   const migrated: string[] = []
   const removed: string[] = []
@@ -129,6 +169,13 @@ export function migrateHookNames(hooks: string[]): { migrated: string[]; changed
   return { migrated, changed, removed }
 }
 
+/**
+ * 迁移 agent 配置：从 model 到 category
+ * 
+ * 将旧的硬编码 model 配置转换为语义化的 category 配置。
+ * 
+ * @returns 迁移后的配置和是否发生变更
+ */
 export function migrateAgentConfigToCategory(config: Record<string, unknown>): {
   migrated: Record<string, unknown>
   changed: boolean
@@ -149,6 +196,11 @@ export function migrateAgentConfigToCategory(config: Record<string, unknown>): {
   }
 }
 
+/**
+ * 判断 agent 配置是否应该删除
+ * 
+ * 如果配置与默认值完全一致，则可以安全删除以减少配置冗余。
+ */
 export function shouldDeleteAgentConfig(
   config: Record<string, unknown>,
   category: string
@@ -168,6 +220,24 @@ export function shouldDeleteAgentConfig(
   return true
 }
 
+/**
+ * 迁移配置文件（主入口函数）
+ * 
+ * 执行所有必要的配置迁移：
+ * 1. Agent 名称标准化
+ * 2. omo_agent → sisyphus_agent 重命名
+ * 3. disabled_agents 名称更新
+ * 4. disabled_hooks 名称更新和废弃 hooks 移除
+ * 
+ * 安全机制：
+ * - 迁移前自动创建带时间戳的备份文件
+ * - 仅在发生变更时写入文件
+ * - 记录所有迁移操作到日志
+ * 
+ * @param configPath 配置文件路径
+ * @param rawConfig 原始配置对象（会被原地修改）
+ * @returns 是否发生了迁移并写入文件
+ */
 export function migrateConfigFile(configPath: string, rawConfig: Record<string, unknown>): boolean {
   let needsWrite = false
 
@@ -178,8 +248,6 @@ export function migrateConfigFile(configPath: string, rawConfig: Record<string, 
       needsWrite = true
     }
   }
-
-
 
   if (rawConfig.omo_agent) {
     rawConfig.sisyphus_agent = rawConfig.omo_agent

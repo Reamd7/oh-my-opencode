@@ -5,24 +5,37 @@ import { getOpenCodeCacheDir } from "./data-path"
 import { readProviderModelsCache, hasProviderModelsCache } from "./connected-providers-cache"
 
 /**
+ * 模糊匹配模型名称
  * Fuzzy match a target model name against available models
  * 
- * @param target - The model name or substring to search for (e.g., "gpt-5.2", "claude-opus")
- * @param available - Set of available model names in format "provider/model-name"
- * @param providers - Optional array of provider names to filter by (e.g., ["openai", "anthropic"])
- * @returns The matched model name or null if no match found
+ * 为什么需要模糊匹配？(Why fuzzy matching?)
+ * - 用户可能输入 "claude-opus-4-5"，但实际模型名是 "claude-opus-4.5"
+ * - 不同provider可能使用不同的命名格式
+ * - 支持部分匹配：输入 "gpt-5.2" 可以匹配 "openai/gpt-5.2-codex"
  * 
- * Matching priority:
- * 1. Exact match (if exists)
- * 2. Shorter model name (more specific)
+ * @param target - 要搜索的模型名称或子串（如 "gpt-5.2", "claude-opus"）
+ * @param available - 可用模型名称集合，格式为 "provider/model-name"
+ * @param providers - 可选的provider过滤列表（如 ["openai", "anthropic"]）
+ * @returns 匹配的模型名称，如果未找到则返回null
  * 
- * Matching is case-insensitive substring match.
- * If providers array is given, only models starting with "provider/" are considered.
+ * 匹配优先级 (Matching priority):
+ * 1. 精确匹配（如果存在）
+ * 2. 最短模型名（更具体）
+ * 
+ * 匹配规则：不区分大小写的子串匹配
+ * 如果提供了providers数组，只考虑以 "provider/" 开头的模型
  * 
  * @example
  * const available = new Set(["openai/gpt-5.2", "openai/gpt-5.2-codex", "anthropic/claude-opus-4-5"])
  * fuzzyMatchModel("gpt-5.2", available) // → "openai/gpt-5.2"
  * fuzzyMatchModel("claude", available, ["openai"]) // → null (provider filter excludes anthropic)
+ */
+/**
+ * 规范化模型名称（处理版本号格式差异）
+ * Normalize model name (handle version number format differences)
+ * 
+ * 将 claude-opus-4-5 和 claude-opus-4.5 统一为 claude-opus-4.5
+ * 这是必要的，因为不同来源可能使用不同的格式
  */
 function normalizeModelName(name: string): string {
 	return name
@@ -45,6 +58,7 @@ export function fuzzyMatchModel(
 
 	const targetNormalized = normalizeModelName(target)
 
+	// 按provider过滤（如果指定）
 	// Filter by providers if specified
 	let candidates = Array.from(available)
 	if (providers && providers.length > 0) {
@@ -61,6 +75,7 @@ export function fuzzyMatchModel(
 		return null
 	}
 
+	// 查找所有匹配项（不区分大小写的子串匹配 + 规范化）
 	// Find all matches (case-insensitive substring match with normalization)
 	const matches = candidates.filter((model) =>
 		normalizeModelName(model).includes(targetNormalized),
@@ -72,6 +87,7 @@ export function fuzzyMatchModel(
 		return null
 	}
 
+	// 优先级1: 精确匹配（规范化后）
 	// Priority 1: Exact match (normalized)
 	const exactMatch = matches.find((model) => normalizeModelName(model) === targetNormalized)
 	if (exactMatch) {
@@ -79,7 +95,9 @@ export function fuzzyMatchModel(
 		return exactMatch
 	}
 
+	// 优先级2: 最短模型名（更具体）
 	// Priority 2: Shorter model name (more specific)
+	// 例如：gpt-5.2 优先于 gpt-5.2-codex
 	const result = matches.reduce((shortest, current) =>
 		current.length < shortest.length ? current : shortest,
 	)
@@ -87,6 +105,10 @@ export function fuzzyMatchModel(
 	return result
 }
 
+/**
+ * 获取已连接的provider列表
+ * Get list of connected providers
+ */
 export async function getConnectedProviders(client: any): Promise<string[]> {
 	if (!client?.provider?.list) {
 		log("[getConnectedProviders] client.provider.list not available")
@@ -104,6 +126,23 @@ export async function getConnectedProviders(client: any): Promise<string[]> {
 	}
 }
 
+/**
+ * 获取可用模型列表
+ * Fetch available models list
+ * 
+ * 数据源优先级 (Data source priority):
+ * 1. provider-models.json 缓存（推荐，包含白名单过滤）
+ * 2. models.json 缓存（回退，无白名单过滤）
+ * 
+ * 缓存机制说明 (Cache mechanism):
+ * - provider-models.json: 由updateConnectedProvidersCache()生成，包含每个provider的模型列表
+ * - models.json: OpenCode原生缓存，包含所有provider和模型信息
+ * - 如果connectedProviders未知，返回空集合以触发快速回退逻辑
+ * 
+ * @param _client - OpenCode client（当前未使用，保留用于未来扩展）
+ * @param options - 选项，包含已连接的provider列表
+ * @returns 可用模型集合，格式为 "provider/model-id"
+ */
 export async function fetchAvailableModels(
 	_client?: any,
 	options?: { connectedProviders?: string[] | null }
@@ -115,6 +154,8 @@ export async function fetchAvailableModels(
 		connectedProviders: options?.connectedProviders 
 	})
 
+	// 如果provider列表未知，返回空集合以触发快速回退
+	// If provider list unknown, return empty set to trigger fast fallback
 	if (connectedProvidersUnknown) {
 		log("[fetchAvailableModels] connected providers unknown, returning empty set for fallback resolution")
 		return new Set<string>()
@@ -124,6 +165,8 @@ export async function fetchAvailableModels(
 	const connectedSet = new Set(connectedProviders)
 	const modelSet = new Set<string>()
 
+	// 优先使用provider-models缓存（包含白名单过滤）
+	// Prefer provider-models cache (includes whitelist filtering)
 	const providerModelsCache = readProviderModelsCache()
 	if (providerModelsCache) {
 		log("[fetchAvailableModels] using provider-models cache (whitelist-filtered)")
@@ -145,6 +188,8 @@ export async function fetchAvailableModels(
 		return modelSet
 	}
 
+	// 回退到models.json（OpenCode原生缓存）
+	// Fallback to models.json (OpenCode native cache)
 	log("[fetchAvailableModels] provider-models cache not found, falling back to models.json")
 	const cacheFile = join(getOpenCodeCacheDir(), "models.json")
 

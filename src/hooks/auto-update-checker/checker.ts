@@ -1,3 +1,13 @@
+/**
+ * 版本检查器
+ * 
+ * 功能：
+ * - 检测本地开发模式
+ * - 获取当前安装的版本
+ * - 从npm获取最新版本
+ * - 查找和更新配置文件中的插件版本
+ * - 支持JSONC格式（带注释的JSON）
+ */
 import * as fs from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -15,10 +25,16 @@ import {
 import * as os from "node:os"
 import { log } from "../../shared/logger"
 
+/**
+ * 判断是否为本地开发模式
+ */
 export function isLocalDevMode(directory: string): boolean {
   return getLocalDevPath(directory) !== null
 }
 
+/**
+ * 移除JSON注释和尾随逗号，支持JSONC格式
+ */
 function stripJsonComments(json: string): string {
   return json
     .replace(/\\"|"(?:\\"|[^"])*"|(\/\/.*|\/\*[\s\S]*?\*\/)/g, (m, g) => (g ? "" : m))
@@ -188,23 +204,26 @@ export function getCachedVersion(): string | null {
 }
 
 /**
- * Updates a pinned version entry in the config file.
- * Only replaces within the "plugin" array to avoid unintended edits.
- * Preserves JSONC comments and formatting via string replacement.
+ * 更新配置文件中的固定版本
+ * 
+ * 特点：
+ * - 仅在"plugin"数组内替换，避免误修改
+ * - 通过字符串替换保留JSONC注释和格式
+ * - 支持带注释的配置文件
  */
 export function updatePinnedVersion(configPath: string, oldEntry: string, newVersion: string): boolean {
   try {
     const content = fs.readFileSync(configPath, "utf-8")
     const newEntry = `${PACKAGE_NAME}@${newVersion}`
     
-    // Find the "plugin" array region to scope replacement
+    // 查找"plugin"数组区域以限定替换范围
     const pluginMatch = content.match(/"plugin"\s*:\s*\[/)
     if (!pluginMatch || pluginMatch.index === undefined) {
       log(`[auto-update-checker] No "plugin" array found in ${configPath}`)
       return false
     }
     
-    // Find the closing bracket of the plugin array
+    // 查找plugin数组的结束括号
     const startIdx = pluginMatch.index + pluginMatch[0].length
     let bracketCount = 1
     let endIdx = startIdx
@@ -219,7 +238,7 @@ export function updatePinnedVersion(configPath: string, oldEntry: string, newVer
     const pluginArrayContent = content.slice(startIdx, endIdx)
     const after = content.slice(endIdx)
     
-    // Only replace first occurrence within plugin array
+    // 仅替换plugin数组内的第一个匹配项
     const escapedOldEntry = oldEntry.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     const regex = new RegExp(`["']${escapedOldEntry}["']`)
     

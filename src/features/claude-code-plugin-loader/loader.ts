@@ -1,3 +1,37 @@
+/**
+ * Claude Code 插件加载器
+ * 
+ * ## 功能
+ * 管理已安装插件的加载和卸载，支持插件发现和组件提取
+ * 
+ * ## 插件发现
+ * 从 ~/.claude/plugins/installed_plugins.json 读取已安装插件列表
+ * 扫描插件目录，加载兼容的命令、代理、技能、MCP服务器和钩子
+ * 
+ * ## 插件结构
+ * ```
+ * ~/.claude/plugins/
+ * ├── installed_plugins.json  # 插件数据库
+ * └── my-plugin/
+ *     ├── .claude-plugin/
+ *     │   └── plugin.json     # 插件清单
+ *     ├── commands/           # 命令定义
+ *     ├── agents/             # 代理定义
+ *     ├── skills/             # 技能定义
+ *     ├── hooks/
+ *     │   └── hooks.json      # 钩子配置
+ *     └── .mcp.json           # MCP服务器配置
+ * ```
+ * 
+ * ## 启用/禁用插件
+ * 通过 ~/.claude/settings.json 的 enabledPlugins 字段控制
+ * 或通过 PluginLoaderOptions.enabledPluginsOverride 覆盖
+ * 
+ * ## 命名空间
+ * 所有插件组件都带有插件名前缀，避免冲突
+ * 例如：my-plugin:my-command, my-plugin:my-agent
+ */
+
 import { existsSync, readdirSync, readFileSync } from "fs"
 import { homedir } from "os"
 import { join, basename } from "path"

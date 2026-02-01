@@ -1,54 +1,120 @@
+/**
+ * @fileoverview Oh My OpenCode 配置架构定义
+ * 
+ * 这个文件定义了插件的完整配置架构，使用Zod进行运行时验证。
+ * 
+ * **配置文件位置：**
+ * - 项目配置：`.opencode/oh-my-opencode.json`
+ * - 用户配置：`~/.config/opencode/oh-my-opencode.json`
+ * - 配置优先级：项目 > 用户 > 默认
+ * 
+ * **支持格式：**
+ * - JSON：标准JSON格式
+ * - JSONC：支持注释和尾随逗号
+ * 
+ * @module config/schema
+ */
+
 import { z } from "zod"
 import { AnyMcpNameSchema, McpNameSchema } from "../mcp/types"
 
+// ============================================================================
+// 权限配置架构
+// ============================================================================
+
+/**
+ * 权限值枚举
+ * - ask: 每次执行前询问用户
+ * - allow: 自动允许执行
+ * - deny: 拒绝执行
+ */
 const PermissionValue = z.enum(["ask", "allow", "deny"])
 
+/**
+ * Bash权限配置
+ * 可以是简单的权限值，或者针对特定命令的权限映射
+ * @example
+ * // 简单模式：所有bash命令都需要询问
+ * "bash": "ask"
+ * 
+ * // 细粒度模式：针对特定命令设置权限
+ * "bash": {
+ *   "rm": "ask",
+ *   "git": "allow",
+ *   "npm": "allow"
+ * }
+ */
 const BashPermission = z.union([
   PermissionValue,
   z.record(z.string(), PermissionValue),
 ])
 
+/**
+ * 代理权限配置架构
+ * 控制代理可以执行的操作类型
+ */
 const AgentPermissionSchema = z.object({
+  /** 编辑文件权限 */
   edit: PermissionValue.optional(),
+  /** Bash命令执行权限 */
   bash: BashPermission.optional(),
+  /** Web获取权限 */
   webfetch: PermissionValue.optional(),
+  /** 死循环保护权限（防止代理陷入无限循环） */
   doom_loop: PermissionValue.optional(),
+  /** 外部目录访问权限 */
   external_directory: PermissionValue.optional(),
 })
 
+// ============================================================================
+// 代理和技能名称枚举
+// ============================================================================
+
+/**
+ * 内置代理名称枚举
+ * 这些是oh-my-opencode提供的专业化AI代理
+ */
 export const BuiltinAgentNameSchema = z.enum([
-  "sisyphus",
-  "prometheus",
-  "oracle",
-  "librarian",
-  "explore",
-  "multimodal-looker",
-  "metis",
-  "momus",
-  "atlas",
+  "sisyphus",           // 主编排器（Opus 4.5）
+  "prometheus",         // 战略规划器
+  "oracle",             // 架构咨询和调试（GPT 5.2）
+  "librarian",          // 文档搜索和代码探索（Sonnet 4.5）
+  "explore",            // 快速代码库grep（Grok Code）
+  "multimodal-looker",  // PDF/图像分析（Gemini 3 Flash）
+  "metis",              // 计划顾问
+  "momus",              // 计划评审
+  "atlas",              // 高级编排器
 ])
 
+/**
+ * 内置技能名称枚举
+ * 这些是oh-my-opencode提供的专业化技能
+ */
 export const BuiltinSkillNameSchema = z.enum([
-  "playwright",
-  "agent-browser",
-  "frontend-ui-ux",
-  "git-master",
+  "playwright",         // 浏览器自动化（Playwright MCP）
+  "agent-browser",      // 代理浏览器（Vercel agent-browser）
+  "frontend-ui-ux",     // 前端UI/UX开发
+  "git-master",         // Git操作（原子提交、rebase等）
 ])
 
+/**
+ * 可覆盖的代理名称枚举
+ * 这些代理的配置可以通过agents配置项覆盖
+ */
 export const OverridableAgentNameSchema = z.enum([
-  "build",
-  "plan",
-  "sisyphus",
-  "sisyphus-junior",
-  "OpenCode-Builder",
-  "prometheus",
-  "metis",
-  "momus",
-  "oracle",
-  "librarian",
-  "explore",
-  "multimodal-looker",
-  "atlas",
+  "build",              // OpenCode内置构建代理
+  "plan",               // OpenCode内置计划代理
+  "sisyphus",           // 主编排器
+  "sisyphus-junior",    // Sisyphus Junior执行器
+  "OpenCode-Builder",   // OpenCode构建器
+  "prometheus",         // 战略规划器
+  "metis",              // 计划顾问
+  "momus",              // 计划评审
+  "oracle",             // 架构咨询
+  "librarian",          // 文档搜索
+  "explore",            // 代码探索
+  "multimodal-looker",  // 多模态分析
+  "atlas",              // 高级编排器
 ])
 
 export const AgentNameSchema = BuiltinAgentNameSchema
@@ -95,39 +161,93 @@ export const BuiltinCommandNameSchema = z.enum([
   "start-work",
 ])
 
+// ============================================================================
+// 代理覆盖配置架构
+// ============================================================================
+
+/**
+ * 代理覆盖配置架构
+ * 用于自定义任何代理的行为、模型、温度等参数
+ * 
+ * @example
+ * ```json
+ * {
+ *   "agents": {
+ *     "sisyphus": {
+ *       "category": "ultrabrain",
+ *       "temperature": 0.1,
+ *       "skills": ["git-master"],
+ *       "permission": {
+ *         "bash": "allow",
+ *         "edit": "allow"
+ *       }
+ *     }
+ *   }
+ * }
+ * ```
+ */
 export const AgentOverrideConfigSchema = z.object({
-  /** @deprecated Use `category` instead. Model is inherited from category defaults. */
+  /** @deprecated 已弃用，请使用 `category` 代替。模型将从分类默认值继承。 */
   model: z.string().optional(),
+  
+  /** 模型变体（如 "high"、"medium"、"low"） */
   variant: z.string().optional(),
-  /** Category name to inherit model and other settings from CategoryConfig */
+  
+  /** 分类名称，从CategoryConfig继承模型和其他设置 */
   category: z.string().optional(),
-  /** Skill names to inject into agent prompt */
+  
+  /** 要注入到代理提示词中的技能名称列表 */
   skills: z.array(z.string()).optional(),
+  
+  /** 温度参数（0-2），控制输出的随机性。代码生成建议0.1-0.3 */
   temperature: z.number().min(0).max(2).optional(),
+  
+  /** Top-p采样参数（0-1），控制输出的多样性 */
   top_p: z.number().min(0).max(1).optional(),
+  
+  /** 完全替换代理的提示词 */
   prompt: z.string().optional(),
+  
+  /** 追加到代理提示词末尾的内容 */
   prompt_append: z.string().optional(),
+  
+  /** 工具启用/禁用配置，键为工具名，值为是否启用 */
   tools: z.record(z.string(), z.boolean()).optional(),
+  
+  /** 是否禁用此代理 */
   disable: z.boolean().optional(),
+  
+  /** 代理描述，显示在delegate_task提示词中 */
   description: z.string().optional(),
+  
+  /** 代理模式：subagent（仅子代理）、primary（仅主代理）、all（全部） */
   mode: z.enum(["subagent", "primary", "all"]).optional(),
+  
+  /** 代理颜色（十六进制格式，如 "#FF5733"） */
   color: z
     .string()
     .regex(/^#[0-9A-Fa-f]{6}$/)
     .optional(),
+  
+  /** 代理权限配置 */
   permission: AgentPermissionSchema.optional(),
-  /** Maximum tokens for response. Passed directly to OpenCode SDK. */
+  
+  /** 最大响应token数。直接传递给OpenCode SDK。 */
   maxTokens: z.number().optional(),
-  /** Extended thinking configuration (Anthropic). Overrides category and default settings. */
+  
+  /** 扩展思考配置（Anthropic专用）。覆盖分类和默认设置。 */
   thinking: z.object({
     type: z.enum(["enabled", "disabled"]),
     budgetTokens: z.number().optional(),
   }).optional(),
-  /** Reasoning effort level (OpenAI). Overrides category and default settings. */
+  
+  /** 推理努力级别（OpenAI专用）。覆盖分类和默认设置。 */
   reasoningEffort: z.enum(["low", "medium", "high", "xhigh"]).optional(),
-  /** Text verbosity level. */
+  
+  /** 文本详细程度级别 */
   textVerbosity: z.enum(["low", "medium", "high"]).optional(),
-  /** Provider-specific options. Passed directly to OpenCode SDK. */
+  
+  /** 提供商特定选项。直接传递给OpenCode SDK。 */
   providerOptions: z.record(z.string(), z.unknown()).optional(),
 })
 
@@ -363,27 +483,93 @@ export const SisyphusConfigSchema = z.object({
   tasks: SisyphusTasksConfigSchema.optional(),
   swarm: SisyphusSwarmConfigSchema.optional(),
 })
+// ============================================================================
+// 主配置架构
+// ============================================================================
+
+/**
+ * Oh My OpenCode 主配置架构
+ * 
+ * 这是插件的根配置对象，包含所有可配置选项。
+ * 
+ * **配置文件示例：**
+ * ```json
+ * {
+ *   "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/master/schema.json",
+ *   "disabled_hooks": ["comment-checker"],
+ *   "agents": {
+ *     "sisyphus": {
+ *       "temperature": 0.1
+ *     }
+ *   },
+ *   "auto_update": true
+ * }
+ * ```
+ * 
+ * @see {@link https://github.com/code-yeongyu/oh-my-opencode/blob/master/docs/configurations.md} 完整配置文档
+ */
 export const OhMyOpenCodeConfigSchema = z.object({
+  /** JSON Schema引用，用于IDE自动补全和验证 */
   $schema: z.string().optional(),
+  
+  /** 禁用的MCP服务器列表（如 ["websearch", "context7"]） */
   disabled_mcps: z.array(AnyMcpNameSchema).optional(),
+  
+  /** 禁用的代理列表（如 ["oracle", "librarian"]） */
   disabled_agents: z.array(BuiltinAgentNameSchema).optional(),
+  
+  /** 禁用的技能列表（如 ["playwright", "git-master"]） */
   disabled_skills: z.array(BuiltinSkillNameSchema).optional(),
+  
+  /** 禁用的钩子列表（如 ["comment-checker", "todo-continuation-enforcer"]） */
   disabled_hooks: z.array(HookNameSchema).optional(),
+  
+  /** 禁用的命令列表（如 ["init-deep", "start-work"]） */
   disabled_commands: z.array(BuiltinCommandNameSchema).optional(),
+  
+  /** 代理覆盖配置，用于自定义代理行为 */
   agents: AgentOverridesSchema.optional(),
+  
+  /** 分类配置，用于定义任务委托的分类和默认模型 */
   categories: CategoriesConfigSchema.optional(),
+  
+  /** Claude Code兼容层配置 */
   claude_code: ClaudeCodeConfigSchema.optional(),
+  
+  /** Sisyphus代理配置（主编排器） */
   sisyphus_agent: SisyphusAgentConfigSchema.optional(),
+  
+  /** 注释检查器配置 */
   comment_checker: CommentCheckerConfigSchema.optional(),
+  
+  /** 实验性功能配置 */
   experimental: ExperimentalConfigSchema.optional(),
+  
+  /** 是否启用自动更新检查（默认：true） */
   auto_update: z.boolean().optional(),
+  
+  /** 技能配置，用于加载自定义技能 */
   skills: SkillsConfigSchema.optional(),
+  
+  /** Ralph循环配置（自引用开发循环） */
   ralph_loop: RalphLoopConfigSchema.optional(),
+  
+  /** 后台任务配置（并发限制等） */
   background_task: BackgroundTaskConfigSchema.optional(),
+  
+  /** 通知配置 */
   notification: NotificationConfigSchema.optional(),
+  
+  /** Git Master配置（提交消息格式等） */
   git_master: GitMasterConfigSchema.optional(),
+  
+  /** 浏览器自动化引擎配置 */
   browser_automation_engine: BrowserAutomationConfigSchema.optional(),
+  
+  /** Tmux集成配置 */
   tmux: TmuxConfigSchema.optional(),
+  
+  /** Sisyphus系统配置（任务和团队） */
   sisyphus: SisyphusConfigSchema.optional(),
 })
 

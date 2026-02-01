@@ -1,3 +1,28 @@
+/**
+ * storage - 会话存储层
+ * 
+ * 负责从文件系统读取会话数据。会话数据存储在 OpenCode 的本地目录中：
+ * - SESSION_STORAGE: 会话元数据（.json 文件）
+ * - MESSAGE_STORAGE: 消息内容（按会话 ID 组织）
+ * - PART_STORAGE: 消息部分（文本、工具调用等）
+ * - TODO_DIR: Todo 列表
+ * - TRANSCRIPT_DIR: 执行日志
+ * 
+ * 存储结构：
+ * ```
+ * ~/.local/share/opencode/
+ *   sessions/
+ *     <project-hash>/
+ *       <session-id>.json  # 会话元数据
+ *   messages/
+ *     <project-hash>/
+ *       <session-id>/
+ *         <message-id>.json  # 消息元数据
+ *   parts/
+ *     <message-id>/
+ *       <part-id>.json  # 消息部分内容
+ * ```
+ */
 import { existsSync, readdirSync } from "node:fs"
 import { readdir, readFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -8,6 +33,15 @@ export interface GetMainSessionsOptions {
   directory?: string
 }
 
+/**
+ * 获取主会话列表（排除子会话）
+ * 
+ * 扫描 SESSION_STORAGE 目录，读取所有会话元数据文件。
+ * 过滤掉子会话（有 parentID 的会话）和不匹配的项目路径。
+ * 
+ * @param options.directory - 可选的项目路径过滤器
+ * @returns 按更新时间倒序排列的会话元数据数组
+ */
 export async function getMainSessions(options: GetMainSessionsOptions): Promise<SessionMetadata[]> {
   if (!existsSync(SESSION_STORAGE)) return []
 
@@ -45,6 +79,14 @@ export async function getMainSessions(options: GetMainSessionsOptions): Promise<
   return sessions.sort((a, b) => b.time.updated - a.time.updated)
 }
 
+/**
+ * 获取所有会话 ID（包括主会话和子会话）
+ * 
+ * 递归扫描 MESSAGE_STORAGE 目录，查找所有包含 .json 文件的目录。
+ * 这些目录的名称即为会话 ID。使用 Set 去重以处理可能的重复。
+ * 
+ * @returns 所有会话 ID 的数组（无特定顺序）
+ */
 export async function getAllSessions(): Promise<string[]> {
   if (!existsSync(MESSAGE_STORAGE)) return []
 

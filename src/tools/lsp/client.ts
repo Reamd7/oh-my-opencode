@@ -1,3 +1,33 @@
+/**
+ * LSP客户端 - Language Server Protocol 集成
+ * 
+ * ## 功能概述
+ * 提供与TypeScript/JavaScript语言服务器的集成，支持代码智能分析。
+ * 
+ * ## 核心能力
+ * - **goto_definition**: 跳转到定义
+ * - **find_references**: 查找所有引用
+ * - **symbols**: 符号搜索（文档/工作区）
+ * - **diagnostics**: 错误和警告诊断
+ * - **rename**: 跨文件重命名
+ * - **prepare_rename**: 重命名前验证
+ * 
+ * ## LSP协议
+ * 基于Language Server Protocol标准，通过stdio与语言服务器通信。
+ * 使用JSON-RPC 2.0协议进行请求-响应通信。
+ * 
+ * ## 架构设计
+ * - **LSPServerManager**: 单例管理器，负责客户端生命周期和资源池化
+ * - **LSPClient**: 单个LSP服务器连接，处理协议通信
+ * - **引用计数**: 自动管理客户端复用，避免重复启动
+ * - **空闲清理**: 5分钟无活动后自动关闭服务器
+ * 
+ * ## 使用场景
+ * - 代码重构前的引用分析
+ * - 类型错误检测
+ * - 符号查找和导航
+ * - 安全的跨文件重命名
+ */
 import { spawn, type Subprocess } from "bun"
 import { readFileSync } from "fs"
 import { extname, resolve } from "path"
@@ -5,6 +35,15 @@ import { pathToFileURL } from "node:url"
 import { getLanguageId } from "./config"
 import type { Diagnostic, ResolvedServer } from "./types"
 
+/**
+ * 托管客户端 - 包含LSP客户端及其元数据
+ * 
+ * @property client - LSP客户端实例
+ * @property lastUsedAt - 最后使用时间戳（用于空闲清理）
+ * @property refCount - 引用计数（0表示可清理）
+ * @property initPromise - 初始化Promise（避免重复初始化）
+ * @property isInitializing - 是否正在初始化
+ */
 interface ManagedClient {
   client: LSPClient
   lastUsedAt: number
@@ -13,11 +52,20 @@ interface ManagedClient {
   isInitializing: boolean
 }
 
+/**
+ * LSP服务器管理器 - 单例模式
+ * 
+ * 负责管理所有LSP客户端的生命周期：
+ * - 客户端池化和复用（避免重复启动）
+ * - 引用计数管理（自动释放）
+ * - 空闲超时清理（5分钟）
+ * - 进程退出时的资源清理
+ */
 class LSPServerManager {
   private static instance: LSPServerManager
-  private clients = new Map<string, ManagedClient>()
+  private clients = new Map<string, ManagedClient>() // key: "root::serverId"
   private cleanupInterval: ReturnType<typeof setInterval> | null = null
-  private readonly IDLE_TIMEOUT = 5 * 60 * 1000
+  private readonly IDLE_TIMEOUT = 5 * 60 * 1000 // 5分钟空闲超时
 
   private constructor() {
     this.startCleanupTimer()
@@ -207,19 +255,37 @@ class LSPServerManager {
 
 export const lspManager = LSPServerManager.getInstance()
 
+/**
+ * LSP客户端 - 单个语言服务器连接
+ * 
+ * 通过stdio与LSP服务器通信，实现JSON-RPC 2.0协议。
+ * 
+ * ## 通信流程
+ * 1. start() - 启动子进程
+ * 2. initialize() - LSP握手（initialize + initialized）
+ * 3. openFile() - 打开文件（textDocument/didOpen）
+ * 4. 调用LSP方法（definition/references/symbols等）
+ * 5. stop() - 关闭连接（shutdown + exit）
+ * 
+ * ## 协议细节
+ * - 消息格式: Content-Length头 + JSON-RPC body
+ * - 请求超时: 15秒
+ * - 文件同步: 自动跟踪已打开文件
+ * - 诊断推送: 自动存储publishDiagnostics通知
+ */
 export class LSPClient {
-  private proc: Subprocess<"pipe", "pipe", "pipe"> | null = null
-  private buffer: Uint8Array = new Uint8Array(0)
-  private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
-  private requestIdCounter = 0
-  private openedFiles = new Set<string>()
-  private stderrBuffer: string[] = []
-  private processExited = false
-  private diagnosticsStore = new Map<string, Diagnostic[]>()
+  private proc: Subprocess<"pipe", "pipe", "pipe"> | null = null // LSP服务器子进程
+  private buffer: Uint8Array = new Uint8Array(0) // stdout缓冲区（解析LSP消息）
+  private pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>() // 待响应的请求
+  private requestIdCounter = 0 // JSON-RPC请求ID计数器
+  private openedFiles = new Set<string>() // 已打开的文件（避免重复didOpen）
+  private stderrBuffer: string[] = [] // stderr日志（用于错误诊断）
+  private processExited = false // 进程是否已退出
+  private diagnosticsStore = new Map<string, Diagnostic[]>() // 诊断缓存（uri -> diagnostics）
 
   constructor(
-    private root: string,
-    private server: ResolvedServer
+    private root: string, // 工作区根目录
+    private server: ResolvedServer // 服务器配置
   ) {}
 
   async start(): Promise<void> {
@@ -317,11 +383,23 @@ export class LSPClient {
     return -1
   }
 
+  /**
+   * 处理LSP消息缓冲区
+   * 
+   * LSP协议消息格式:
+   * Content-Length: 123\r\n\r\n{"jsonrpc":"2.0",...}
+   * 
+   * 解析步骤:
+   * 1. 查找"Content-Length:"头
+   * 2. 提取消息长度
+   * 3. 读取指定长度的JSON body
+   * 4. 分发到对应的处理器（响应/通知/请求）
+   */
   private processBuffer(): void {
     const decoder = new TextDecoder()
-    const CONTENT_LENGTH = [67, 111, 110, 116, 101, 110, 116, 45, 76, 101, 110, 103, 116, 104, 58]
-    const CRLF_CRLF = [13, 10, 13, 10]
-    const LF_LF = [10, 10]
+    const CONTENT_LENGTH = [67, 111, 110, 116, 101, 110, 116, 45, 76, 101, 110, 103, 116, 104, 58] // "Content-Length:" ASCII
+    const CRLF_CRLF = [13, 10, 13, 10] // \r\n\r\n
+    const LF_LF = [10, 10] // \n\n (兼容某些服务器)
 
     while (true) {
       const headerStart = this.findSequence(this.buffer, CONTENT_LENGTH)
@@ -371,6 +449,13 @@ export class LSPClient {
     }
   }
 
+  /**
+   * 发送LSP请求（JSON-RPC 2.0）
+   * 
+   * @param method - LSP方法名（如"textDocument/definition"）
+   * @param params - 方法参数
+   * @returns Promise，15秒超时
+   */
   private send(method: string, params?: unknown): Promise<unknown> {
     if (!this.proc) throw new Error("LSP client not started")
 
@@ -392,7 +477,7 @@ export class LSPClient {
           const stderr = this.stderrBuffer.slice(-5).join("\n")
           reject(new Error(`LSP request timeout (method: ${method})` + (stderr ? `\nrecent stderr: ${stderr}` : "")))
         }
-      }, 15000)
+      }, 15000) // 15秒超时
     })
   }
 

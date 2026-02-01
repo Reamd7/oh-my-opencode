@@ -1,14 +1,36 @@
+/**
+ * 会话恢复存储操作
+ * 
+ * 提供读取和修改持久化存储的函数
+ * 所有操作直接操作文件系统中的JSON文件
+ */
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { MESSAGE_STORAGE, PART_STORAGE, THINKING_TYPES, META_TYPES } from "./constants"
 import type { StoredMessageMeta, StoredPart, StoredTextPart } from "./types"
 
+/**
+ * 生成部件ID
+ * 格式：prt_{timestamp}{random}
+ * 
+ * @returns 唯一的部件ID
+ */
 export function generatePartId(): string {
   const timestamp = Date.now().toString(16)
   const random = Math.random().toString(36).substring(2, 10)
   return `prt_${timestamp}${random}`
 }
 
+/**
+ * 获取消息目录路径
+ * 
+ * 搜索策略：
+ * 1. 尝试直接路径：MESSAGE_STORAGE/{sessionID}
+ * 2. 搜索子目录：MESSAGE_STORAGE/*\/{sessionID}
+ * 
+ * @param sessionID - 会话ID
+ * @returns 消息目录路径，如果不存在则返回空字符串
+ */
 export function getMessageDir(sessionID: string): string {
   if (!existsSync(MESSAGE_STORAGE)) return ""
 
@@ -27,6 +49,14 @@ export function getMessageDir(sessionID: string): string {
   return ""
 }
 
+/**
+ * 读取会话的所有消息
+ * 
+ * 从文件系统加载消息元数据，按时间排序
+ * 
+ * @param sessionID - 会话ID
+ * @returns 消息元数据数组，按创建时间排序
+ */
 export function readMessages(sessionID: string): StoredMessageMeta[] {
   const messageDir = getMessageDir(sessionID)
   if (!messageDir || !existsSync(messageDir)) return []
@@ -50,6 +80,12 @@ export function readMessages(sessionID: string): StoredMessageMeta[] {
   })
 }
 
+/**
+ * 读取消息的所有部件
+ * 
+ * @param messageID - 消息ID
+ * @returns 部件数组
+ */
 export function readParts(messageID: string): StoredPart[] {
   const partDir = join(PART_STORAGE, messageID)
   if (!existsSync(partDir)) return []
@@ -267,6 +303,18 @@ function findLastThinkingContent(sessionID: string, beforeMessageID: string): st
   return ""
 }
 
+/**
+ * 在消息开头添加thinking部件
+ * 
+ * 用于修复thinking块顺序错误
+ * 尝试从之前的助手消息中获取thinking内容（遵循Anthropic建议）
+ * 
+ * 部件ID使用特殊前缀 prt_0000000000_ 确保排序时位于最前
+ * 
+ * @param sessionID - 会话ID
+ * @param messageID - 消息ID
+ * @returns 是否成功添加
+ */
 export function prependThinkingPart(sessionID: string, messageID: string): boolean {
   const partDir = join(PART_STORAGE, messageID)
 

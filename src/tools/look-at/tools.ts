@@ -1,3 +1,28 @@
+/**
+ * look-at - 多模态文件分析工具
+ * 
+ * ## 功能
+ * 分析图片、PDF等非文本文件
+ * 
+ * ## 能力
+ * - OCR文字识别
+ * - 图表理解
+ * - 文档摘要
+ * - 视频/音频分析
+ * 
+ * ## 后端
+ * 使用multimodal-looker代理（默认Gemini 3 Flash）
+ * 
+ * ## 使用场景
+ * - 提取PDF文档内容
+ * - 识别截图中的文字
+ * - 理解架构图
+ * - 分析数据可视化
+ * 
+ * ## 示例
+ * look_at(file_path="/path/to/diagram.png", goal="解释这个架构图")
+ * look_at(file_path="/path/to/doc.pdf", goal="提取第3页的表格数据")
+ */
 import { extname, basename } from "node:path"
 import { pathToFileURL } from "node:url"
 import { tool, type PluginInput, type ToolDefinition } from "@opencode-ai/plugin"
@@ -64,6 +89,18 @@ function inferMimeType(filePath: string): string {
   return mimeTypes[ext] || "application/octet-stream"
 }
 
+/**
+ * 创建look_at工具
+ * 
+ * @param ctx - 插件输入上下文
+ * @returns look_at工具定义
+ * 
+ * 该工具：
+ * 1. 创建子会话
+ * 2. 使用multimodal-looker代理
+ * 3. 传递文件和目标
+ * 4. 返回分析结果
+ */
 export function createLookAt(ctx: PluginInput): ToolDefinition {
   return tool({
     description: LOOK_AT_DESCRIPTION,
@@ -72,6 +109,7 @@ export function createLookAt(ctx: PluginInput): ToolDefinition {
       goal: tool.schema.string().describe("What specific information to extract from the file"),
     },
     async execute(rawArgs: LookAtArgs, toolContext) {
+      // 规范化和验证参数
       const args = normalizeArgs(rawArgs as LookAtArgsWithAlias)
       const validationError = validateArgs(args)
       if (validationError) {
@@ -81,6 +119,7 @@ export function createLookAt(ctx: PluginInput): ToolDefinition {
 
       log(`[look_at] Analyzing file: ${args.file_path}, goal: ${args.goal}`)
 
+      // 推断MIME类型
       const mimeType = inferMimeType(args.file_path)
       const filename = basename(args.file_path)
 
@@ -92,6 +131,7 @@ Provide ONLY the extracted information that matches the goal.
 Be thorough on what was requested, concise on everything else.
 If the requested information is not found, clearly state what is missing.`
 
+      // 创建子会话
       log(`[look_at] Creating session with parent: ${toolContext.sessionID}`)
       const parentSession = await ctx.client.session.get({
         path: { id: toolContext.sessionID },
@@ -103,7 +143,7 @@ If the requested information is not found, clearly state what is missing.`
           parentID: toolContext.sessionID,
           title: `look_at: ${args.goal.substring(0, 50)}`,
           permission: [
-            { permission: "question", action: "deny" as const, pattern: "*" },
+            { permission: "question", action: "deny" as const, pattern: "*" }, // 禁止提问
           ],
         } as any,
         query: {
@@ -130,13 +170,15 @@ Original error: ${createResult.error}`
       const sessionID = createResult.data.id
       log(`[look_at] Created session: ${sessionID}`)
 
+      // 发送提示和文件
       log(`[look_at] Sending prompt with file passthrough to session ${sessionID}`)
       try {
         await ctx.client.session.prompt({
           path: { id: sessionID },
           body: {
-            agent: MULTIMODAL_LOOKER_AGENT,
+            agent: MULTIMODAL_LOOKER_AGENT, // 使用多模态代理
             tools: {
+              // 禁用递归工具
               task: false,
               call_omo_agent: false,
               look_at: false,

@@ -1,3 +1,61 @@
+/**
+ * delegate-task - 任务委托工具
+ * 
+ * ## 功能概述
+ * delegate-task 是 oh-my-opencode 的核心编排工具，负责将任务路由到最合适的专业代理。
+ * 它是系统的"任务调度中心"，实现了复杂的代理编排逻辑。
+ * 
+ * ## 核心功能
+ * 1. **Category-based 代理选择**: 根据任务类型（visual-engineering, ultrabrain等）自动选择最佳模型
+ * 2. **Skill 注入系统**: 为代理提供专业能力（playwright, git-master等）
+ * 3. **后台任务管理**: 支持异步执行（background=true）实现并行处理
+ * 4. **Session 连续性**: 通过 session_id 复用实现上下文保持和多轮对话
+ * 
+ * ## Category 分类体系
+ * - **visual-engineering**: 前端、UI/UX、设计、动画 → Gemini 3 Pro
+ * - **ultrabrain**: 深度逻辑推理、复杂架构决策 → GPT 5.2 Codex
+ * - **artistry**: 创意/艺术任务 → Gemini 3 Pro (max variant)
+ * - **quick**: 简单快速任务 → Claude Haiku 4.5
+ * - **unspecified-low/high**: 未分类任务 → Sonnet/Opus
+ * - **writing**: 文档、技术写作 → Gemini 3 Flash
+ * 
+ * ## 使用模式
+ * 
+ * ### 同步执行（等待结果）
+ * ```typescript
+ * delegate_task({
+ *   category: 'ultrabrain',
+ *   load_skills: ['git-master'],
+ *   prompt: 'Analyze the architecture...',
+ *   run_in_background: false
+ * })
+ * ```
+ * 
+ * ### 异步执行（后台运行）
+ * ```typescript
+ * const taskId = delegate_task({
+ *   category: 'quick',
+ *   load_skills: [],
+ *   prompt: 'Fix typo in README',
+ *   run_in_background: true
+ * })
+ * // 使用 background_output(task_id) 获取结果
+ * ```
+ * 
+ * ### 继续会话（保持上下文）
+ * ```typescript
+ * delegate_task({
+ *   session_id: 'ses_xxx',
+ *   prompt: 'Fix: the previous implementation has a bug...'
+ * })
+ * ```
+ * 
+ * ## 架构设计
+ * - **Model Resolution**: 优先级 user override > category default > system default
+ * - **Skill Injection**: 通过 systemContent 注入，增强代理能力
+ * - **Session Management**: 自动创建子会话，保持父子关系
+ * - **Stability Detection**: 轮询机制确保任务完成后才返回结果
+ */
 import { tool, type PluginInput, type ToolDefinition } from "@opencode-ai/plugin"
 import { existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
@@ -20,8 +78,24 @@ import { CATEGORY_MODEL_REQUIREMENTS } from "../../shared/model-requirements"
 
 type OpencodeClient = PluginInput["client"]
 
+/**
+ * Sisyphus-Junior 代理名称常量
+ * 
+ * Sisyphus-Junior 是 category-based 任务的默认执行代理。
+ * 当用户指定 category 时，系统会自动选择 sisyphus-junior 并配置对应的模型。
+ */
 const SISYPHUS_JUNIOR_AGENT = "sisyphus-junior"
 
+/**
+ * 解析模型字符串为 providerID 和 modelID
+ * 
+ * @param model - 模型字符串，格式为 "provider/model"（如 "anthropic/claude-opus-4-5"）
+ * @returns 解析后的对象 { providerID, modelID }，解析失败返回 undefined
+ * 
+ * @example
+ * parseModelString("anthropic/claude-opus-4-5")
+ * // => { providerID: "anthropic", modelID: "claude-opus-4-5" }
+ */
 function parseModelString(model: string): { providerID: string; modelID: string } | undefined {
   const parts = model.split("/")
   if (parts.length >= 2) {
@@ -111,6 +185,28 @@ type ToolContextWithMetadata = {
   metadata?: (input: { title?: string; metadata?: Record<string, unknown> }) => void
 }
 
+/**
+ * 解析 Category 配置
+ * 
+ * 这是 category-based 任务路由的核心函数，负责：
+ * 1. 合并默认配置和用户自定义配置
+ * 2. 解析模型优先级（user override > category default > system default）
+ * 3. 合并 prompt append（category 特定的系统提示词）
+ * 
+ * ## 模型优先级规则
+ * - **User Override**: 用户在 oh-my-opencode.json 中为 category 指定的模型
+ * - **Category Default**: category 的内置默认模型（如 visual-engineering → gemini-3-pro）
+ * - **System Default**: OpenCode 全局配置的默认模型
+ * 
+ * 注意：Category 有显式模型配置，不继承父会话的模型
+ * 
+ * @param categoryName - Category 名称（如 "visual-engineering", "ultrabrain"）
+ * @param options - 配置选项
+ * @param options.userCategories - 用户自定义的 category 配置
+ * @param options.inheritedModel - 继承的模型（未使用，category 不继承）
+ * @param options.systemDefaultModel - 系统默认模型
+ * @returns 解析后的配置对象，包含 config、promptAppend、model；category 不存在返回 null
+ */
 export function resolveCategoryConfig(
   categoryName: string,
   options: {
@@ -128,11 +224,9 @@ export function resolveCategoryConfig(
     return null
   }
 
-  // Model priority for categories: user override > category default > system default
-  // Categories have explicit models - no inheritance from parent session
   const model = resolveModel({
     userModel: userConfig?.model,
-    inheritedModel: defaultConfig?.model, // Category's built-in model takes precedence over system default
+    inheritedModel: defaultConfig?.model,
     systemDefault: systemDefaultModel,
   })
   const config: CategoryConfig = {
@@ -175,6 +269,30 @@ export interface BuildSystemContentInput {
   agentName?: string
 }
 
+/**
+ * 构建系统内容（System Content）
+ * 
+ * 这是 Skill 注入系统的核心函数，负责将多个来源的系统提示词组合成最终的 system content：
+ * 1. **Plan Agent Prepend**: 如果是计划代理（Prometheus），注入计划相关的系统提示
+ * 2. **Skill Content**: 用户通过 load_skills 参数加载的技能内容
+ * 3. **Category Prompt Append**: Category 特定的系统提示词（如 visual-engineering 的设计指导）
+ * 
+ * ## Skill 注入机制
+ * - Skills 通过 `load_skills` 参数指定（如 ["playwright", "git-master"]）
+ * - 系统会解析 skill 文件内容并注入到 system content
+ * - Skills 为代理提供专业能力和领域知识
+ * 
+ * ## 组合顺序
+ * 1. Plan Agent Prepend（如果适用）
+ * 2. Skill Content
+ * 3. Category Prompt Append
+ * 
+ * @param input - 输入参数
+ * @param input.skillContent - 技能内容（已解析的 skill 文件内容）
+ * @param input.categoryPromptAppend - Category 特定的提示词
+ * @param input.agentName - 代理名称（用于判断是否为计划代理）
+ * @returns 组合后的系统内容，如果所有部分都为空则返回 undefined
+ */
 export function buildSystemContent(input: BuildSystemContentInput): string | undefined {
   const { skillContent, categoryPromptAppend, agentName } = input
 
@@ -201,6 +319,46 @@ export function buildSystemContent(input: BuildSystemContentInput): string | und
   return parts.join("\n\n") || undefined
 }
 
+/**
+ * 创建 delegate_task 工具定义
+ * 
+ * 这是 delegate-task 工具的工厂函数，负责创建完整的工具定义。
+ * 
+ * ## 核心职责
+ * 1. **参数验证**: 确保 run_in_background 和 load_skills 参数正确
+ * 2. **Skill 解析**: 加载并解析用户指定的 skills
+ * 3. **路由决策**: 根据 category 或 subagent_type 选择执行代理
+ * 4. **执行模式**: 处理同步/异步/会话继续三种执行模式
+ * 5. **结果返回**: 轮询任务完成并返回结果
+ * 
+ * ## 三种执行模式
+ * 
+ * ### 1. 会话继续（Session Continuation）
+ * - 使用 `session_id` 参数继续已有会话
+ * - 保持完整上下文，节省 token
+ * - 适用场景：任务失败需要修复、需要追加问题
+ * 
+ * ### 2. 异步执行（Background Mode）
+ * - `run_in_background: true`
+ * - 立即返回 task_id，任务在后台运行
+ * - 适用场景：并行探索、长时间运行的任务
+ * 
+ * ### 3. 同步执行（Sync Mode）
+ * - `run_in_background: false`
+ * - 等待任务完成后返回结果
+ * - 适用场景：需要立即获取结果的任务
+ * 
+ * @param options - 工具配置选项
+ * @param options.manager - 后台任务管理器
+ * @param options.client - OpenCode 客户端
+ * @param options.directory - 工作目录
+ * @param options.userCategories - 用户自定义的 category 配置
+ * @param options.gitMasterConfig - Git Master skill 配置
+ * @param options.sisyphusJuniorModel - Sisyphus-Junior 默认模型
+ * @param options.browserProvider - 浏览器自动化提供商配置
+ * @param options.onSyncSessionCreated - 同步会话创建回调
+ * @returns ToolDefinition 对象
+ */
 export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefinition {
   const { manager, client, directory, userCategories, gitMasterConfig, sisyphusJuniorModel, browserProvider, onSyncSessionCreated } = options
 
@@ -260,6 +418,9 @@ Prompts MUST be in English.`
       }
       const runInBackground = args.run_in_background === true
 
+      // Skill 解析和注入
+      // 将用户指定的 skills（如 ["playwright", "git-master"]）解析为实际的 skill 内容
+      // 这些内容会被注入到代理的 system prompt 中，为代理提供专业能力
       let skillContent: string | undefined
       if (args.load_skills.length > 0) {
         const { resolved, notFound } = await resolveMultipleSkillsAsync(args.load_skills, { gitMasterConfig, browserProvider })
@@ -294,8 +455,12 @@ Prompts MUST be in English.`
           }
         : undefined
 
+      // 执行模式 1: 会话继续（Session Continuation）
+      // 使用已有的 session_id 继续对话，保持完整上下文
+      // 这是最节省 token 的方式，适合任务失败后修复或追加问题
       if (args.session_id) {
         if (runInBackground) {
+          // 后台模式继续会话
           try {
             const task = await manager.resume({
               sessionId: args.session_id,
@@ -516,12 +681,16 @@ To continue this session: session_id="${args.session_id}"`
 
        let modelInfo: ModelFallbackInfo | undefined
 
+       // Category-based 路由：根据任务类型选择最佳模型
+       // Category 系统是 delegate-task 的核心特性，实现了任务类型到模型的智能映射
+       // 例如：visual-engineering → Gemini 3 Pro, ultrabrain → GPT 5.2 Codex
        if (args.category) {
           const connectedProviders = readConnectedProvidersCache()
           const availableModels = await fetchAvailableModels(client, {
             connectedProviders: connectedProviders ?? undefined
           })
 
+         // 解析 category 配置，获取模型和 prompt append
          const resolved = resolveCategoryConfig(args.category, {
            userCategories,
            inheritedModel,
@@ -531,6 +700,7 @@ To continue this session: session_id="${args.session_id}"`
            return `Unknown category: "${args.category}". Available: ${Object.keys({ ...DEFAULT_CATEGORIES, ...userCategories }).join(", ")}`
          }
 
+         // 模型 fallback 链：确保即使首选模型不可用也能找到替代方案
          const requirement = CATEGORY_MODEL_REQUIREMENTS[args.category]
          let actualModel: string | undefined
 
@@ -992,8 +1162,18 @@ To continue this session: session_id="${task.sessionID}"`
           })
         }
 
-        // Poll for session completion with stability detection
-        // The session may show as "idle" before messages appear, so we also check message stability
+        // 轮询机制：等待任务完成并确保结果稳定
+        // 
+        // 为什么需要稳定性检测？
+        // - 会话可能在消息出现前就显示为 "idle"
+        // - 需要确保消息数量稳定（连续 N 次轮询消息数不变）才能确认任务真正完成
+        // - 避免过早返回不完整的结果
+        //
+        // 轮询参数：
+        // - POLL_INTERVAL_MS: 轮询间隔（默认 500ms）
+        // - MIN_STABILITY_TIME_MS: 最小稳定时间（默认 10s）
+        // - STABILITY_POLLS_REQUIRED: 需要连续稳定的轮询次数（默认 3 次）
+        // - MAX_POLL_TIME_MS: 最大轮询时间（默认 10 分钟）
         const syncTiming = getTimingConfig()
         const POLL_INTERVAL_MS = syncTiming.POLL_INTERVAL_MS
         const MAX_POLL_TIME_MS = syncTiming.MAX_POLL_TIME_MS

@@ -11,19 +11,30 @@ import {
 import { ensureAstGrepBinary } from "./downloader"
 import type { CliMatch, CliLanguage, SgResult } from "./types"
 
+/** AST-grep CLI执行选项 */
 export interface RunOptions {
-  pattern: string
-  lang: CliLanguage
-  paths?: string[]
-  globs?: string[]
-  rewrite?: string
-  context?: number
-  updateAll?: boolean
+  pattern: string // 搜索模式（支持meta变量）
+  lang: CliLanguage // 目标语言
+  paths?: string[] // 搜索路径（默认为当前目录）
+  globs?: string[] // 包含/排除的glob模式
+  rewrite?: string // 替换模式（用于替换操作）
+  context?: number // 上下文行数
+  updateAll?: boolean // 是否实际修改文件（false为dry-run）
 }
 
+/** 已解析的CLI路径（缓存） */
 let resolvedCliPath: string | null = null
+/** 初始化Promise（避免重复初始化） */
 let initPromise: Promise<string | null> | null = null
 
+/**
+ * 获取AST-grep CLI路径
+ * 
+ * 查找顺序：
+ * 1. 缓存的路径
+ * 2. 同步查找（node_modules、系统PATH）
+ * 3. 自动下载二进制文件
+ */
 export async function getAstGrepPath(): Promise<string | null> {
   if (resolvedCliPath !== null && existsSync(resolvedCliPath)) {
     return resolvedCliPath
@@ -54,6 +65,10 @@ export async function getAstGrepPath(): Promise<string | null> {
   return initPromise
 }
 
+/**
+ * 启动后台初始化
+ * 在插件加载时调用，提前下载二进制文件，避免首次使用时等待
+ */
 export function startBackgroundInit(): void {
   if (!initPromise) {
     initPromise = getAstGrepPath()
@@ -61,6 +76,19 @@ export function startBackgroundInit(): void {
   }
 }
 
+/**
+ * 执行AST-grep CLI命令
+ * 
+ * ## 超时和限制
+ * - 超时: 300秒（DEFAULT_TIMEOUT_MS）
+ * - 最大输出: 1MB（DEFAULT_MAX_OUTPUT_BYTES）
+ * - 最大匹配数: 500（DEFAULT_MAX_MATCHES）
+ * 
+ * ## 错误处理
+ * - 二进制不存在：自动下载
+ * - 超时：返回截断结果
+ * - 输出过大：截断并尝试解析
+ */
 export async function runSg(options: RunOptions): Promise<SgResult> {
   const args = ["run", "-p", options.pattern, "--lang", options.lang, "--json=compact"]
 

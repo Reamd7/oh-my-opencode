@@ -1,3 +1,40 @@
+/**
+ * 后台代理管理器 (Background Agent Manager)
+ * 
+ * ## 功能概述
+ * BackgroundManager 是 oh-my-opencode 的核心任务编排引擎，负责管理所有异步后台任务的完整生命周期。
+ * 
+ * ## 核心职责
+ * - **任务启动**: 创建和初始化后台任务，分配并发槽位
+ * - **任务轮询**: 定期检查任务状态（2秒间隔），监控进度
+ * - **并发控制**: 管理每个提供商/模型的并行任务数量和资源
+ * - **稳定性检测**: 连续3次空闲轮询判定任务完成
+ * - **进程清理**: 任务完成后的资源释放和通知
+ * 
+ * ## 任务生命周期
+ * 1. **launch** → pending（入队等待）
+ * 2. pending → running（获取并发槽位，开始执行）
+ * 3. running → polling（定期检查状态）
+ * 4. **稳定性检测**（3次连续空闲）
+ * 5. running → completed/failed（完成或失败）
+ * 6. **清理资源**（释放槽位，通知父会话）
+ * 
+ * ## 并发策略
+ * - **最大并发数**: 根据 provider/model 限制（可配置）
+ * - **队列管理**: FIFO 队列，按并发键分组
+ * - **优先级支持**: 高优先级任务优先执行
+ * 
+ * ## 稳定性检测算法
+ * 连续3次轮询无新消息 → 判定任务完成
+ * 防止过早终止还在"思考"的任务
+ * 
+ * ## 清理机制
+ * - **30分钟 TTL**: 超时自动清理
+ * - **3分钟 stale timeout**: 无响应任务清理
+ * - **会话删除**: 监听 session.deleted 事件，清理相关状态
+ * 
+ * @module features/background-agent/manager
+ */
 
 import type { PluginInput } from "@opencode-ai/plugin"
 import type {
@@ -16,10 +53,11 @@ import { findNearestMessageWithFields, MESSAGE_STORAGE } from "../hook-message-i
 import { existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 
-const TASK_TTL_MS = 30 * 60 * 1000
-const MIN_STABILITY_TIME_MS = 10 * 1000  // Must run at least 10s before stability detection kicks in
-const DEFAULT_STALE_TIMEOUT_MS = 180_000  // 3 minutes
-const MIN_RUNTIME_BEFORE_STALE_MS = 30_000  // 30 seconds
+// 任务生命周期常量
+const TASK_TTL_MS = 30 * 60 * 1000  // 30分钟：任务最大存活时间
+const MIN_STABILITY_TIME_MS = 10 * 1000  // 10秒：稳定性检测前的最小运行时间
+const DEFAULT_STALE_TIMEOUT_MS = 180_000  // 3分钟：无响应判定为停滞
+const MIN_RUNTIME_BEFORE_STALE_MS = 30_000  // 30秒：停滞检测前的最小运行时间
 
 type ProcessCleanupEvent = NodeJS.Signals | "beforeExit" | "exit"
 
@@ -63,26 +101,42 @@ export interface SubagentSessionCreatedEvent {
 
 export type OnSubagentSessionCreated = (event: SubagentSessionCreatedEvent) => Promise<void>
 
+/**
+ * 后台任务管理器
+ * 
+ * 负责管理所有后台任务的完整生命周期，包括：
+ * - 任务队列和并发控制
+ * - 状态跟踪和进度监控
+ * - 稳定性检测和自动清理
+ * - 父会话通知和资源释放
+ */
 export class BackgroundManager {
+  // 静态成员：进程级清理管理
   private static cleanupManagers = new Set<BackgroundManager>()
   private static cleanupRegistered = false
   private static cleanupHandlers = new Map<ProcessCleanupEvent, () => void>()
 
-  private tasks: Map<string, BackgroundTask>
-  private notifications: Map<string, BackgroundTask[]>
-  private pendingByParent: Map<string, Set<string>>  // Track pending tasks per parent for batching
-  private client: OpencodeClient
-  private directory: string
-  private pollingInterval?: ReturnType<typeof setInterval>
-  private concurrencyManager: ConcurrencyManager
-  private shutdownTriggered = false
-  private config?: BackgroundTaskConfig
-  private tmuxEnabled: boolean
-  private onSubagentSessionCreated?: OnSubagentSessionCreated
+  // 任务状态管理
+  private tasks: Map<string, BackgroundTask>  // 所有任务的状态存储
+  private notifications: Map<string, BackgroundTask[]>  // 待通知的任务队列
+  private pendingByParent: Map<string, Set<string>>  // 按父会话分组的待处理任务（用于批量通知）
+  
+  // 核心依赖
+  private client: OpencodeClient  // OpenCode API 客户端
+  private directory: string  // 工作目录
+  private pollingInterval?: ReturnType<typeof setInterval>  // 轮询定时器
+  private concurrencyManager: ConcurrencyManager  // 并发控制管理器
+  
+  // 配置和状态
+  private shutdownTriggered = false  // 关闭标志
+  private config?: BackgroundTaskConfig  // 后台任务配置
+  private tmuxEnabled: boolean  // Tmux 集成开关
+  private onSubagentSessionCreated?: OnSubagentSessionCreated  // Tmux 会话创建回调
   private onShutdown?: () => void
 
-  private queuesByKey: Map<string, QueueItem[]> = new Map()
-  private processingKeys: Set<string> = new Set()
+  // 队列管理
+  private queuesByKey: Map<string, QueueItem[]> = new Map()  // 按并发键分组的任务队列
+  private processingKeys: Set<string> = new Set()  // 正在处理的并发键集合
 
   constructor(
     ctx: PluginInput,
@@ -106,6 +160,14 @@ export class BackgroundManager {
     this.registerProcessCleanup()
   }
 
+  /**
+   * 启动后台任务
+   * 
+   * 生命周期：创建任务 → 入队 → 等待并发槽位 → 开始执行
+   * 
+   * @param input 任务启动参数
+   * @returns 创建的任务对象（状态为 pending）
+   */
   async launch(input: LaunchInput): Promise<BackgroundTask> {
     log("[background-agent] launch() called with:", {
       agent: input.agent,
@@ -118,13 +180,10 @@ export class BackgroundManager {
       throw new Error("Agent parameter is required")
     }
 
-    // Create task immediately with status="pending"
     const task: BackgroundTask = {
       id: `bg_${crypto.randomUUID().slice(0, 8)}`,
       status: "pending",
       queuedAt: new Date(),
-      // Do NOT set startedAt - will be set when running
-      // Do NOT set sessionID - will be set when running
       description: input.description,
       prompt: input.prompt,
       agent: input.agent,
@@ -137,14 +196,12 @@ export class BackgroundManager {
 
     this.tasks.set(task.id, task)
 
-    // Track for batched notifications immediately (pending state)
     if (input.parentSessionID) {
       const pending = this.pendingByParent.get(input.parentSessionID) ?? new Set()
       pending.add(task.id)
       this.pendingByParent.set(input.parentSessionID, pending)
     }
 
-    // Add to queue
     const key = this.getConcurrencyKeyFromInput(input)
     const queue = this.queuesByKey.get(key) ?? []
     queue.push({ task, input })
@@ -164,12 +221,21 @@ export class BackgroundManager {
       })
     }
 
-    // Trigger processing (fire-and-forget)
     this.processKey(key)
 
     return task
   }
 
+  /**
+   * 处理指定并发键的任务队列
+   * 
+   * 并发控制核心：
+   * 1. 防止同一并发键的重复处理
+   * 2. 逐个获取并发槽位
+   * 3. 启动任务并从队列移除
+   * 
+   * @param key 并发键（provider/model 或 agent）
+   */
   private async processKey(key: string): Promise<void> {
     if (this.processingKeys.has(key)) {
       return
@@ -394,8 +460,13 @@ export class BackgroundManager {
   }
 
   /**
-   * Track a task created elsewhere (e.g., from delegate_task) for notification tracking.
-   * This allows tasks created by other tools to receive the same toast/prompt notifications.
+   * 跟踪外部创建的任务
+   * 
+   * 用于将其他工具（如 delegate_task）创建的任务纳入管理，
+   * 使其能够接收相同的通知和状态跟踪。
+   * 
+   * @param input 任务跟踪参数
+   * @returns 跟踪的任务对象
    */
   async trackTask(input: {
     taskId: string
@@ -615,6 +686,16 @@ export class BackgroundManager {
     }
   }
 
+  /**
+   * 处理 OpenCode 事件
+   * 
+   * 监听三类关键事件：
+   * 1. message.part.updated - 更新任务进度（工具调用计数）
+   * 2. session.idle - 检测任务完成（稳定性检测的补充）
+   * 3. session.deleted - 清理任务资源
+   * 
+   * @param event OpenCode 事件对象
+   */
   handleEvent(event: Event): void {
     const props = event.properties
 
@@ -650,7 +731,6 @@ export class BackgroundManager {
       const startedAt = task.startedAt
       if (!startedAt) return
 
-      // Edge guard: Require minimum elapsed time (5 seconds) before accepting idle
       const elapsedMs = Date.now() - startedAt.getTime()
       const MIN_IDLE_TIME_MS = 5000
       if (elapsedMs < MIN_IDLE_TIME_MS) {
@@ -658,9 +738,7 @@ export class BackgroundManager {
         return
       }
 
-      // Edge guard: Verify session has actual assistant output before completing
       this.validateSessionHasOutput(sessionID).then(async (hasValidOutput) => {
-        // Re-check status after async operation (could have been completed by polling)
         if (task.status !== "running") {
           log("[background-agent] Task status changed during validation, skipping:", { taskId: task.id, status: task.status })
           return
@@ -673,7 +751,6 @@ export class BackgroundManager {
 
         const hasIncompleteTodos = await this.checkSessionTodos(sessionID)
 
-        // Re-check status after async operation again
         if (task.status !== "running") {
           log("[background-agent] Task status changed during todo check, skipping:", { taskId: task.id, status: task.status })
           return
@@ -708,7 +785,6 @@ export class BackgroundManager {
          this.concurrencyManager.release(task.concurrencyKey)
          task.concurrencyKey = undefined
        }
-      // Clean up pendingByParent to prevent stale entries
       this.cleanupPendingByParent(task)
       this.tasks.delete(task.id)
       this.clearNotificationsForTask(task.id)
@@ -926,8 +1002,16 @@ export class BackgroundManager {
   }
 
   /**
-   * Safely complete a task with race condition protection.
-   * Returns true if task was successfully completed, false if already completed by another path.
+   * 安全地完成任务（带竞态条件保护）
+   * 
+   * 防止多个路径同时完成同一任务：
+   * - session.idle 事件
+   * - 轮询检测
+   * - 手动取消
+   * 
+   * @param task 要完成的任务
+   * @param source 完成来源（用于日志）
+   * @returns true=成功完成，false=已被其他路径完成
    */
   private async tryCompleteTask(task: BackgroundTask, source: string): Promise<boolean> {
     // Guard: Check if task is still running (could have been completed by another path)
@@ -1281,7 +1365,25 @@ Use \`background_output(task_id="${task.id}")\` to retrieve this result when rea
             task.progress.lastMessageAt = new Date()
           }
 
-          // Stability detection: complete when message count unchanged for 3 polls
+          /**
+           * 稳定性检测算法
+           * 
+           * 目标：判断任务是否真正完成（而非暂时空闲）
+           * 
+           * 算法步骤：
+           * 1. 检查运行时间 >= 10秒（防止过早判定）
+           * 2. 比较消息数是否变化
+           * 3. 连续3次轮询无变化 → 可能完成
+           * 4. 二次确认：检查会话状态是否为 idle
+           * 5. 三次确认：验证会话有实际输出
+           * 6. 四次确认：检查是否有未完成的 todos
+           * 7. 全部通过 → 完成任务
+           * 
+           * 为什么需要这么多确认？
+           * - 防止代理"假装工作"但实际卡住
+           * - 防止过早终止还在思考的任务
+           * - 确保任务真正产生了有效输出
+           */
           const currentMsgCount = messages.length
           const startedAt = task.startedAt
           if (!startedAt) continue
@@ -1292,7 +1394,6 @@ Use \`background_output(task_id="${task.id}")\` to retrieve this result when rea
             if (task.lastMsgCount === currentMsgCount) {
               task.stablePolls = (task.stablePolls ?? 0) + 1
               if (task.stablePolls >= 3) {
-                // Re-fetch session status to confirm agent is truly idle
                 const recheckStatus = await this.client.session.status()
                 const recheckData = (recheckStatus.data ?? {}) as Record<string, { type: string }>
                 const currentStatus = recheckData[sessionID]
@@ -1306,14 +1407,12 @@ Use \`background_output(task_id="${task.id}")\` to retrieve this result when rea
                   continue
                 }
 
-                // Edge guard: Validate session has actual output before completing
                 const hasValidOutput = await this.validateSessionHasOutput(sessionID)
                 if (!hasValidOutput) {
                   log("[background-agent] Stability reached but no valid output, waiting:", task.id)
                   continue
                 }
 
-                // Re-check status after async operation
                 if (task.status !== "running") continue
 
                 const hasIncompleteTodos = await this.checkSessionTodos(sessionID)
@@ -1339,9 +1438,15 @@ Use \`background_output(task_id="${task.id}")\` to retrieve this result when rea
   }
 
   /**
-   * Shutdown the manager gracefully.
-   * Cancels all pending concurrency waiters and clears timers.
-   * Should be called when the plugin is unloaded.
+   * 优雅关闭管理器
+   * 
+   * 清理所有资源：
+   * - 停止轮询定时器
+   * - 释放所有并发槽位
+   * - 取消所有等待中的任务
+   * - 清空状态存储
+   * 
+   * 应在插件卸载时调用
    */
   shutdown(): void {
     if (this.shutdownTriggered) return

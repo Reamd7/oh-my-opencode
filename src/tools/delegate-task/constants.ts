@@ -1,5 +1,28 @@
+/**
+ * delegate-task 常量定义
+ * 
+ * 本文件定义了 category 系统的核心配置：
+ * 1. **DEFAULT_CATEGORIES**: 每个 category 的默认模型配置
+ * 2. **CATEGORY_PROMPT_APPENDS**: 每个 category 的系统提示词
+ * 3. **CATEGORY_DESCRIPTIONS**: 每个 category 的描述文本
+ * 4. **PLAN_AGENT_SYSTEM_PREPEND**: 计划代理的特殊系统提示
+ * 
+ * ## Category 设计理念
+ * 不同类型的任务需要不同的模型和提示词：
+ * - 视觉任务需要强大的多模态能力 → Gemini 3 Pro
+ * - 深度推理需要最强的逻辑能力 → GPT 5.2 Codex
+ * - 快速任务需要高性价比模型 → Claude Haiku 4.5
+ */
 import type { CategoryConfig } from "../../config/schema"
 
+/**
+ * Visual Engineering Category 的系统提示词
+ * 
+ * 强调设计优先的思维方式：
+ * - 大胆的美学选择，避免安全的默认值
+ * - 独特的排版和布局
+ * - 高影响力的动画效果
+ */
 export const VISUAL_CATEGORY_PROMPT_APPEND = `<Category_Context>
 You are working on VISUAL/UI tasks.
 
@@ -155,6 +178,21 @@ Approach:
 
 
 
+/**
+ * 默认 Category 配置
+ * 
+ * 定义了每个 category 的默认模型和 variant。
+ * 用户可以在 oh-my-opencode.json 中覆盖这些配置。
+ * 
+ * ## Category 到模型的映射
+ * - **visual-engineering**: Gemini 3 Pro - 强大的多模态能力，适合 UI/UX 任务
+ * - **ultrabrain**: GPT 5.2 Codex (xhigh) - 最强逻辑推理，适合复杂架构决策
+ * - **artistry**: Gemini 3 Pro (max) - 最大创造力，适合艺术/创意任务
+ * - **quick**: Claude Haiku 4.5 - 高性价比，适合简单快速任务
+ * - **unspecified-low**: Claude Sonnet 4.5 - 中等能力，适合未分类的中等任务
+ * - **unspecified-high**: Claude Opus 4.5 (max) - 高能力，适合未分类的复杂任务
+ * - **writing**: Gemini 3 Flash - 快速流畅，适合文档写作
+ */
 export const DEFAULT_CATEGORIES: Record<string, CategoryConfig> = {
   "visual-engineering": { model: "google/gemini-3-pro" },
   ultrabrain: { model: "openai/gpt-5.2-codex", variant: "xhigh" },

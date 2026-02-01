@@ -1,4 +1,70 @@
 /**
+ * Prometheus - 战略规划代理提示词
+ * 
+ * ## 命名由来
+ * 以希腊神话中的普罗米修斯命名，他为人类带来了火种（知识/远见）。
+ * 
+ * ## 角色定位
+ * Prometheus 是 oh-my-opencode 的战略规划师，负责将用户的高层需求转化为详细的执行计划。
+ * 它不是实现者，而是规划者——它设计工作计划，由 Sisyphus 执行。
+ * 
+ * ## 核心能力
+ * 1. **需求分析和澄清**：通过结构化面试收集详细需求
+ * 2. **任务分解**：将复杂需求分解为原子任务，识别依赖关系
+ * 3. **优先级排序**：确定任务执行顺序和并行机会
+ * 4. **风险评估**：识别潜在问题并提供缓解策略
+ * 5. **质量保证**：通过 Metis（差距分析）和 Momus（计划审查）确保计划完整性
+ * 
+ * ## 工作模式
+ * 
+ * ### 模式 1: 面试/咨询模式（默认）
+ * - 通过对话收集需求，而非立即生成计划
+ * - 使用 librarian/explore 代理收集上下文信息
+ * - 提供建议并提出澄清问题
+ * - 持续更新草稿文件（.sisyphus/drafts/*.md）作为工作记忆
+ * 
+ * ### 模式 2: 计划生成模式（触发条件）
+ * - 自动触发：所有需求清晰后自动转换
+ * - 显式触发：用户说"生成工作计划"或"保存为文件"
+ * - 生成前咨询 Metis 进行差距分析
+ * - 可选：通过 Momus 循环进行高精度验证
+ * 
+ * ## 输出格式
+ * 计划保存到 `.sisyphus/plans/{plan-name}.md`，包含：
+ * - **TL;DR**：快速摘要、交付物、工作量估算
+ * - **Context**：原始请求、面试总结、研究发现
+ * - **Work Objectives**：核心目标、交付物、完成定义、边界
+ * - **Verification Strategy**：测试策略（TDD/手动验证）
+ * - **Execution Strategy**：并行执行波次、依赖矩阵
+ * - **TODOs**：详细任务列表，包含：
+ *   - 实现步骤
+ *   - 推荐代理配置（category + skills）
+ *   - 并行化信息（依赖关系）
+ *   - 参考资料（代码模式、API、文档）
+ *   - 验收标准（可执行的验证步骤）
+ * 
+ * ## 关键约束
+ * 1. **只能写 .md 文件**：由 prometheus-md-only hook 强制执行
+ * 2. **单一计划原则**：无论任务多大，所有内容都放在一个计划文件中
+ * 3. **草稿作为工作记忆**：面试期间持续记录到草稿，计划完成后删除
+ * 4. **强制 Metis 咨询**：生成计划前必须咨询 Metis 进行差距分析
+ * 5. **高精度模式**：用户可选 Momus 循环，直到计划通过严格审查
+ * 
+ * ## 与其他代理的协作
+ * - **Metis**：计划生成前的差距分析师，识别遗漏的问题和边界
+ * - **Momus**：计划审查员，进行严格的质量检查（高精度模式）
+ * - **Librarian**：收集官方文档和开源实现
+ * - **Explore**：快速探索代码库模式和结构
+ * - **Sisyphus**：执行计划的实现者（通过 /start-work 命令）
+ * 
+ * ## 设计哲学
+ * "规划 ≠ 实现"。Prometheus 专注于思考和设计，Sisyphus 专注于执行。
+ * 这种分离确保了：
+ * - 计划质量：专注于规划而非实现细节
+ * - 可追溯性：清晰的审计轨迹
+ * - 可恢复性：计划可以在不同会话中执行
+ * - 并行化：多个任务可以同时执行
+ * 
  * Prometheus Planner System Prompt
  *
  * Named after the Titan who gave fire (knowledge/foresight) to humanity.
@@ -16,6 +82,25 @@
  * Can write .md files only (enforced by prometheus-md-only hook).
  */
 
+/**
+ * Prometheus 系统提示词常量
+ * 
+ * 这是一个 1200+ 行的复杂提示词，定义了 Prometheus 的完整行为规范。
+ * 
+ * **提示词结构：**
+ * 1. CRITICAL IDENTITY：身份约束（规划者，非实现者）
+ * 2. ABSOLUTE CONSTRAINTS：绝对约束（面试模式、自动转换、文件权限）
+ * 3. TURN TERMINATION RULES：回合终止规则（强制提问或完成）
+ * 4. PHASE 1: INTERVIEW MODE：面试模式（意图分类、研究策略、草稿管理）
+ * 5. PHASE 2: PLAN GENERATION：计划生成（Metis 咨询、自我审查、差距处理）
+ * 6. PHASE 3: HIGH ACCURACY MODE：高精度模式（Momus 循环）
+ * 
+ * **关键设计决策：**
+ * - 默认面试模式：避免过早生成不完整的计划
+ * - 自动转换机制：所有需求清晰后自动进入计划生成
+ * - 强制 Metis 咨询：确保计划完整性
+ * - 可选 Momus 循环：用户可选的严格质量保证
+ */
 export const PROMETHEUS_SYSTEM_PROMPT = `<system-reminder>
 # Prometheus - Strategic Planning Consultant
 
@@ -1271,6 +1356,21 @@ This will:
 `
 
 /**
+ * Prometheus 代理权限配置
+ * 
+ * **权限说明：**
+ * - `edit: "allow"`: 允许编辑文件（仅限 .md 文件，由 prometheus-md-only hook 强制执行）
+ * - `bash: "allow"`: 允许执行 bash 命令（用于文件操作，如删除草稿）
+ * - `webfetch: "allow"`: 允许获取网页内容（用于研究外部资源）
+ * - `question: "allow"`: 允许通过 OpenCode 的 QuestionTool 向用户提问
+ * 
+ * **为什么只允许 .md 文件：**
+ * Prometheus 是规划者，不是实现者。它只能创建计划文件（.md），不能修改代码。
+ * 这个约束由 prometheus-md-only hook 在运行时强制执行，防止 Prometheus 越权操作。
+ * 
+ * **为什么需要 question 权限：**
+ * 面试模式需要向用户提出结构化问题（如多选题），QuestionTool 提供更好的用户体验。
+ * 
  * Prometheus planner permission configuration.
  * Allows write/edit for plan files (.md only, enforced by prometheus-md-only hook).
  * Question permission allows agent to ask user questions via OpenCode's QuestionTool.

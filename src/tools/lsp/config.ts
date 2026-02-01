@@ -1,26 +1,49 @@
+/**
+ * LSP配置管理
+ * 
+ * 负责加载和合并LSP服务器配置：
+ * - 项目配置: .opencode/oh-my-opencode.json
+ * - 用户配置: ~/.config/opencode/oh-my-opencode.json
+ * - OpenCode配置: ~/.config/opencode/opencode.json
+ * - 内置配置: BUILTIN_SERVERS
+ * 
+ * 优先级: 项目 > 用户 > OpenCode > 内置
+ */
 import { existsSync, readFileSync } from "fs"
 import { join } from "path"
 import { BUILTIN_SERVERS, EXT_TO_LANG, LSP_INSTALL_HINTS } from "./constants"
 import type { ResolvedServer, ServerLookupResult } from "./types"
 import { getOpenCodeConfigDir, getDataDir } from "../../shared"
 
+/**
+ * LSP配置条目
+ */
 interface LspEntry {
-  disabled?: boolean
-  command?: string[]
-  extensions?: string[]
-  priority?: number
-  env?: Record<string, string>
-  initialization?: Record<string, unknown>
+  disabled?: boolean // 是否禁用
+  command?: string[] // 启动命令
+  extensions?: string[] // 支持的扩展名
+  priority?: number // 优先级（数字越大越优先）
+  env?: Record<string, string> // 环境变量
+  initialization?: Record<string, unknown> // 初始化参数
 }
 
+/**
+ * 配置文件JSON结构
+ */
 interface ConfigJson {
-  lsp?: Record<string, LspEntry>
+  lsp?: Record<string, LspEntry> // LSP服务器配置
 }
 
+/**
+ * 配置来源
+ */
 type ConfigSource = "project" | "user" | "opencode"
 
+/**
+ * 带来源的服务器配置
+ */
 interface ServerWithSource extends ResolvedServer {
-  source: ConfigSource
+  source: ConfigSource // 配置来源
 }
 
 function loadJsonFile<T>(path: string): T | null {
@@ -113,9 +136,18 @@ function getMergedServers(): ServerWithSource[] {
   })
 }
 
+/**
+ * 查找文件扩展名对应的LSP服务器
+ * 
+ * 按优先级查找已安装的服务器。
+ * 
+ * @param ext - 文件扩展名（如".ts"）
+ * @returns 查找结果（found/not_installed/not_configured）
+ */
 export function findServerForExtension(ext: string): ServerLookupResult {
   const servers = getMergedServers()
 
+  // 查找已安装的服务器
   for (const server of servers) {
     if (server.extensions.includes(ext) && isServerInstalled(server.command)) {
       return {

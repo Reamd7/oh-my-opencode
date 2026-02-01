@@ -1,5 +1,14 @@
 import type { AnalyzeResult, SgResult } from "./types"
 
+/**
+ * 格式化搜索结果为用户友好的文本
+ * 
+ * 输出格式：
+ * - 错误信息（如果有）
+ * - 截断警告（如果结果被截断）
+ * - 匹配数量统计
+ * - 每个匹配的位置和代码片段
+ */
 export function formatSearchResult(result: SgResult): string {
   if (result.error) {
     return `Error: ${result.error}`
@@ -32,6 +41,12 @@ export function formatSearchResult(result: SgResult): string {
   return lines.join("\n")
 }
 
+/**
+ * 格式化替换结果为用户友好的文本
+ * 
+ * @param result - AST-grep执行结果
+ * @param isDryRun - 是否为dry-run模式（预览模式）
+ */
 export function formatReplaceResult(result: SgResult, isDryRun: boolean): string {
   if (result.error) {
     return `Error: ${result.error}`
@@ -69,6 +84,12 @@ export function formatReplaceResult(result: SgResult, isDryRun: boolean): string
   return lines.join("\n")
 }
 
+/**
+ * 格式化分析结果
+ * 
+ * @param results - 分析结果列表
+ * @param extractedMetaVars - 是否提取并显示meta变量
+ */
 export function formatAnalyzeResult(results: AnalyzeResult[], extractedMetaVars: boolean): string {
   if (results.length === 0) {
     return "No matches found"
@@ -93,6 +114,13 @@ export function formatAnalyzeResult(results: AnalyzeResult[], extractedMetaVars:
   return lines.join("\n")
 }
 
+/**
+ * 格式化转换结果
+ * 
+ * @param _original - 原始代码（未使用）
+ * @param transformed - 转换后的代码
+ * @param editCount - 编辑次数
+ */
 export function formatTransformResult(_original: string, transformed: string, editCount: number): string {
   if (editCount === 0) {
     return "No matches found to transform"

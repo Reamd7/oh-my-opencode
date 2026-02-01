@@ -1,3 +1,12 @@
+/**
+ * LSP工具函数
+ * 
+ * 提供LSP客户端的辅助功能：
+ * - 工作区根目录查找
+ * - LSP响应格式化
+ * - WorkspaceEdit应用
+ * - 错误消息格式化
+ */
 import { extname, resolve } from "path"
 import { fileURLToPath } from "node:url"
 import { existsSync, readFileSync, writeFileSync } from "fs"
@@ -18,6 +27,11 @@ import type {
   ServerLookupResult,
 } from "./types"
 
+/**
+ * 查找工作区根目录
+ * 
+ * 向上查找包含项目标记文件的目录（.git, package.json等）
+ */
 export function findWorkspaceRoot(filePath: string): string {
   let dir = resolve(filePath)
 
@@ -79,6 +93,14 @@ export function formatServerLookupError(result: Exclude<ServerLookupResult, { st
   ].join("\n")
 }
 
+/**
+ * 使用LSP客户端执行操作
+ * 
+ * 自动管理客户端生命周期（获取、使用、释放）
+ * 
+ * @param filePath - 文件路径（用于确定服务器和工作区）
+ * @param fn - 使用客户端的回调函数
+ */
 export async function withLspClient<T>(filePath: string, fn: (client: LSPClient) => Promise<T>): Promise<T> {
   const absPath = resolve(filePath)
   const ext = extname(absPath)
@@ -310,6 +332,15 @@ function applyTextEditsToFile(filePath: string, edits: TextEdit[]): { success: b
   }
 }
 
+/**
+ * 应用工作区编辑
+ * 
+ * 将LSP返回的WorkspaceEdit应用到文件系统。
+ * 支持文本编辑、文件创建、重命名、删除。
+ * 
+ * @param edit - LSP返回的工作区编辑
+ * @returns 应用结果（成功/失败、修改的文件列表、错误信息）
+ */
 export function applyWorkspaceEdit(edit: WorkspaceEdit | null): ApplyResult {
   if (!edit) {
     return { success: false, filesModified: [], totalEdits: 0, errors: ["No edit provided"] }

@@ -3,18 +3,39 @@ import { join } from "path"
 import { log } from "./logger"
 import { getOmoOpenCodeCacheDir } from "./data-path"
 
+/**
+ * Provider缓存系统
+ * Provider caching system
+ * 
+ * 两个缓存文件 (Two cache files):
+ * 1. connected-providers.json: 已连接的provider列表（轻量级）
+ * 2. provider-models.json: 每个provider的模型列表（完整信息）
+ * 
+ * 缓存策略 (Caching strategy):
+ * - 在PreToolUse hook中更新缓存（每次工具调用前）
+ * - 避免频繁调用client.provider.list()和client.model.list()
+ * - 提供快速的模型可用性检查
+ */
 const CONNECTED_PROVIDERS_CACHE_FILE = "connected-providers.json"
 const PROVIDER_MODELS_CACHE_FILE = "provider-models.json"
 
+/**
+ * 已连接provider缓存结构
+ * Connected providers cache structure
+ */
 interface ConnectedProvidersCache {
-	connected: string[]
-	updatedAt: string
+	connected: string[]  // Provider ID列表 (Provider ID list)
+	updatedAt: string    // 更新时间戳 (Update timestamp)
 }
 
+/**
+ * Provider模型缓存结构
+ * Provider models cache structure
+ */
 interface ProviderModelsCache {
-	models: Record<string, string[]>
-	connected: string[]
-	updatedAt: string
+	models: Record<string, string[]>  // Provider ID -> 模型ID列表 (Provider ID -> Model ID list)
+	connected: string[]               // 已连接的provider列表 (Connected provider list)
+	updatedAt: string                 // 更新时间戳 (Update timestamp)
 }
 
 function getCacheFilePath(filename: string): string {
@@ -29,8 +50,10 @@ function ensureCacheDir(): void {
 }
 
 /**
- * Read the connected providers cache.
- * Returns the list of connected provider IDs, or null if cache doesn't exist.
+ * 读取已连接provider缓存
+ * Read the connected providers cache
+ * 
+ * @returns Provider ID列表，如果缓存不存在则返回null
  */
 export function readConnectedProvidersCache(): string[] | null {
 	const cacheFile = getCacheFilePath(CONNECTED_PROVIDERS_CACHE_FILE)
@@ -52,7 +75,8 @@ export function readConnectedProvidersCache(): string[] | null {
 }
 
 /**
- * Check if connected providers cache exists.
+ * 检查已连接provider缓存是否存在
+ * Check if connected providers cache exists
  */
 export function hasConnectedProvidersCache(): boolean {
 	const cacheFile = getCacheFilePath(CONNECTED_PROVIDERS_CACHE_FILE)
@@ -60,7 +84,8 @@ export function hasConnectedProvidersCache(): boolean {
 }
 
 /**
- * Write the connected providers cache.
+ * 写入已连接provider缓存
+ * Write the connected providers cache
  */
 function writeConnectedProvidersCache(connected: string[]): void {
 	ensureCacheDir()
@@ -80,8 +105,10 @@ function writeConnectedProvidersCache(connected: string[]): void {
 }
 
 /**
- * Read the provider-models cache.
- * Returns the cache data, or null if cache doesn't exist.
+ * 读取provider-models缓存
+ * Read the provider-models cache
+ * 
+ * @returns 缓存数据，如果缓存不存在则返回null
  */
 export function readProviderModelsCache(): ProviderModelsCache | null {
 	const cacheFile = getCacheFilePath(PROVIDER_MODELS_CACHE_FILE)
@@ -106,7 +133,8 @@ export function readProviderModelsCache(): ProviderModelsCache | null {
 }
 
 /**
- * Check if provider-models cache exists.
+ * 检查provider-models缓存是否存在
+ * Check if provider-models cache exists
  */
 export function hasProviderModelsCache(): boolean {
 	const cacheFile = getCacheFilePath(PROVIDER_MODELS_CACHE_FILE)
@@ -114,7 +142,8 @@ export function hasProviderModelsCache(): boolean {
 }
 
 /**
- * Write the provider-models cache.
+ * 写入provider-models缓存
+ * Write the provider-models cache
  */
 export function writeProviderModelsCache(data: { models: Record<string, string[]>; connected: string[] }): void {
 	ensureCacheDir()
@@ -136,8 +165,16 @@ export function writeProviderModelsCache(data: { models: Record<string, string[]
 }
 
 /**
- * Update the connected providers cache by fetching from the client.
- * Also updates the provider-models cache with model lists per provider.
+ * 更新已连接provider缓存
+ * Update the connected providers cache by fetching from the client
+ * 
+ * 同时更新两个缓存 (Updates both caches):
+ * 1. connected-providers.json: Provider列表
+ * 2. provider-models.json: 每个provider的模型列表
+ * 
+ * 调用时机 (When to call):
+ * - PreToolUse hook中（每次工具调用前）
+ * - 确保缓存始终是最新的
  */
 export async function updateConnectedProvidersCache(client: {
 	provider?: {

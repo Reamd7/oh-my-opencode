@@ -1,27 +1,94 @@
+/**
+ * @file 动态代理提示词构建器 - oh-my-opencode 的核心创新
+ * 
+ * **为什么需要动态构建提示词？**
+ * 
+ * 传统方式：将代理信息硬编码在提示词中
+ * 问题：
+ * - 新增代理需要手动更新 Sisyphus 提示词的多个位置
+ * - 代理信息不一致（工具列表过时、技能描述错误）
+ * - 配置启用/禁用代理后提示词没有反映变化
+ * 
+ * 动态构建方式：基于元数据在运行时生成提示词
+ * 优势：
+ * - 代理信息始终最新（工具列表、技能定义、其他代理）
+ * - 新增代理只需定义元数据，提示词自动包含
+ * - 配置变更自动反映到提示词
+ * - 统一的信息源，避免不一致
+ * 
+ * **架构设计：**
+ * 
+ * 1. 元数据收集：从各代理的 PROMPT_METADATA 收集信息
+ * 2. 动态组装：根据元数据生成提示词各部分（Key Triggers, Tool Selection, Delegation Table）
+ * 3. 注入提示词：将生成的部分插入 Sisyphus/Atlas 的提示词模板
+ * 
+ * 这个文件是元数据驱动设计的核心实现。
+ */
+
 import type { AgentPromptMetadata, BuiltinAgentName } from "./types"
 
+/**
+ * 可用代理信息
+ * 
+ * 用于在 Sisyphus 提示词中展示当前可用的代理。
+ * 这些信息从配置中动态计算（考虑禁用的代理）。
+ */
 export interface AvailableAgent {
   name: BuiltinAgentName
   description: string
   metadata: AgentPromptMetadata
 }
 
+/**
+ * 可用工具信息
+ * 
+ * 用于在 Tool Selection 表格中展示工具。
+ * 工具按类别分组（lsp_*, ast_grep, search 等）以简化展示。
+ */
 export interface AvailableTool {
   name: string
   category: "lsp" | "ast" | "search" | "session" | "command" | "other"
 }
 
+/**
+ * 可用技能信息
+ * 
+ * 用于在 Category + Skills Delegation 部分展示技能。
+ * `location` 表示技能来源（插件内置、用户、项目）。
+ */
 export interface AvailableSkill {
   name: string
   description: string
   location: "user" | "project" | "plugin"
 }
 
+/**
+ * 可用分类信息
+ * 
+ * 用于展示 delegate_task 的 category 参数可选值。
+ * 描述帮助 Sisyphus 选择最合适的分类。
+ */
 export interface AvailableCategory {
   name: string
   description: string
 }
 
+/**
+ * 工具分类器
+ * 
+ * 将工具名称列表按类别分组，用于在 Tool Selection 表格中简洁展示。
+ * 
+ * 分类规则：
+ * - `lsp_*` → lsp（代码重构、跳转、引用查找）
+ * - `ast_grep*` → ast（AST 级别的代码搜索和替换）
+ * - grep/glob → search（文件搜索）
+ * - `session_*` → session（会话管理）
+ * - slashcommand → command（斜杠命令）
+ * - 其他 → other
+ * 
+ * 分组后的展示格式："`grep`, `glob`, `lsp_*`, `ast_grep`"
+ * 这样可以避免列出几十个 lsp_* 工具名称，保持提示词简洁。
+ */
 export function categorizeTools(toolNames: string[]): AvailableTool[] {
   return toolNames.map((name) => {
     let category: AvailableTool["category"] = "other"
@@ -40,6 +107,17 @@ export function categorizeTools(toolNames: string[]): AvailableTool[] {
   })
 }
 
+/**
+ * 工具格式化器 - 生成提示词中的工具展示字符串
+ * 
+ * 将分类后的工具列表转换为简洁的展示格式。
+ * 使用通配符（lsp_*, ast_grep）避免提示词过长。
+ * 
+ * 输出示例："`grep`, `glob`, `lsp_*`, `ast_grep`"
+ * 
+ * 优先级顺序：search → lsp → ast
+ * 这个顺序反映了工具的使用频率（搜索工具最常用）。
+ */
 function formatToolsForPrompt(tools: AvailableTool[]): string {
   const lspTools = tools.filter((t) => t.category === "lsp")
   const astTools = tools.filter((t) => t.category === "ast")
@@ -62,6 +140,24 @@ function formatToolsForPrompt(tools: AvailableTool[]): string {
   return parts.join(", ")
 }
 
+/**
+ * 构建 Key Triggers 部分 - Phase 0 关键决策点
+ * 
+ * Key Triggers 出现在 Sisyphus 提示词的 Phase 0（意图识别阶段），
+ * 影响主代理的初始决策，在任务分类之前就触发特定行为。
+ * 
+ * 例如：
+ * - "External library mentioned → fire librarian background"
+ * - "Complex architecture → consult Oracle"
+ * 
+ * 为什么重要：
+ * - 避免主代理在探索阶段浪费时间
+ * - 提前启动并行任务（librarian/explore 后台运行）
+ * - 确保复杂任务获得正确的专家支持
+ * 
+ * @param agents - 当前可用的代理列表
+ * @returns Markdown 格式的 Key Triggers 部分，如果没有触发器则返回空字符串
+ */
 export function buildKeyTriggersSection(agents: AvailableAgent[], _skills: AvailableSkill[] = []): string {
   const keyTriggers = agents
     .filter((a) => a.metadata.keyTrigger)
@@ -75,6 +171,29 @@ ${keyTriggers.join("\n")}
 - **"Look into" + "create PR"** → Not just research. Full implementation cycle expected.`
 }
 
+/**
+ * 构建 Tool & Agent Selection 表格 - 成本感知的资源选择指南
+ * 
+ * 这个表格是 Sisyphus 决策的核心参考，按成本排序展示可用资源：
+ * FREE（直接工具）→ CHEAP（快速代理）→ EXPENSIVE（高质量代理）
+ * 
+ * 表格结构：
+ * | Resource              | Cost      | When to Use                    |
+ * |-----------------------|-----------|--------------------------------|
+ * | grep, glob, lsp_*     | FREE      | Not Complex, Scope Clear       |
+ * | explore agent         | CHEAP     | Fast codebase grep             |
+ * | librarian agent       | CHEAP     | Docs, GitHub search            |
+ * | oracle agent          | EXPENSIVE | Complex architecture, debugging |
+ * 
+ * 为什么按成本排序：
+ * - 引导 Sisyphus 优先使用低成本资源
+ * - 避免过度使用昂贵的代理（如 Oracle）
+ * - 实现成本感知的任务分解策略
+ * 
+ * @param agents - 当前可用的代理列表
+ * @param tools - 当前可用的工具列表
+ * @returns Markdown 表格格式的资源选择指南
+ */
 export function buildToolSelectionTable(
   agents: AvailableAgent[],
   tools: AvailableTool[] = [],
@@ -93,6 +212,7 @@ export function buildToolSelectionTable(
     rows.push(`| ${toolsDisplay} | FREE | Not Complex, Scope Clear, No Implicit Assumptions |`)
   }
 
+  // 按成本排序：FREE < CHEAP < EXPENSIVE
   const costOrder = { FREE: 0, CHEAP: 1, EXPENSIVE: 2 }
   const sortedAgents = [...agents]
     .filter((a) => a.metadata.category !== "utility")
@@ -166,6 +286,34 @@ export function buildDelegationTable(agents: AvailableAgent[]): string {
   return rows.join("\n")
 }
 
+/**
+ * 构建 Category + Skills Delegation 指南 - delegate_task 的完整使用说明
+ * 
+ * 这是 oh-my-opencode 的核心创新之一：将 category（领域优化模型）和 skill（专业知识注入）
+ * 结合起来，实现精确的任务委托。
+ * 
+ * **Category（分类）：**
+ * - 每个 category 配置了针对该领域优化的模型
+ * - 例如："visual-engineering" 使用 Gemini 3 Pro（前端专家）
+ * - 例如："ultrabrain" 使用高推理能力模型（复杂架构）
+ * 
+ * **Skill（技能）：**
+ * - 技能向子代理注入专业知识（如 playwright、git-master）
+ * - 子代理是无状态的，只知道你告诉它的内容
+ * - 遗漏相关技能 = 子代理缺少关键知识 = 次优输出
+ * 
+ * **强制协议：**
+ * 提示词要求 Sisyphus：
+ * 1. 评估所有技能的相关性
+ * 2. 如果不包含某个技能，必须书面说明理由
+ * 3. 强制思考过程，避免懒惰遗漏
+ * 
+ * 这个函数生成包含完整使用协议的指南部分。
+ * 
+ * @param categories - 可用的任务分类列表
+ * @param skills - 可用的技能列表
+ * @returns Markdown 格式的完整委托指南，包括强制协议
+ */
 export function buildCategorySkillsDelegationGuide(categories: AvailableCategory[], skills: AvailableSkill[]): string {
   if (categories.length === 0 && skills.length === 0) return ""
 

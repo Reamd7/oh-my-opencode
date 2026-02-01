@@ -5,6 +5,10 @@ import { getCachedBinaryPath } from "./downloader"
 
 type Platform = "darwin" | "linux" | "win32" | "unsupported"
 
+/**
+ * 验证二进制文件是否有效
+ * 通过检查文件大小（>10KB）来判断是否为有效的二进制文件
+ */
 function isValidBinary(filePath: string): boolean {
   try {
     return statSync(filePath).size > 10000
@@ -13,6 +17,10 @@ function isValidBinary(filePath: string): boolean {
   }
 }
 
+/**
+ * 获取平台特定的包名
+ * 根据当前平台和架构返回对应的@ast-grep/cli-*包名
+ */
 function getPlatformPackageName(): string | null {
   const platform = process.platform as Platform
   const arch = process.arch
@@ -30,6 +38,15 @@ function getPlatformPackageName(): string | null {
   return platformMap[`${platform}-${arch}`] ?? null
 }
 
+/**
+ * 同步查找AST-grep CLI路径
+ * 
+ * 查找顺序：
+ * 1. 缓存目录
+ * 2. @ast-grep/cli包
+ * 3. 平台特定包（如@ast-grep/cli-darwin-arm64）
+ * 4. Homebrew安装路径（仅macOS）
+ */
 export function findSgCliPathSync(): string | null {
   const binaryName = process.platform === "win32" ? "sg.exe" : "sg"
 
@@ -80,8 +97,13 @@ export function findSgCliPathSync(): string | null {
   return null
 }
 
+/** 已解析的CLI路径（缓存） */
 let resolvedCliPath: string | null = null
 
+/**
+ * 获取AST-grep CLI路径
+ * 返回缓存的路径，或同步查找，或返回"sg"（假设在PATH中）
+ */
 export function getSgCliPath(): string {
   if (resolvedCliPath !== null) {
     return resolvedCliPath
@@ -96,11 +118,12 @@ export function getSgCliPath(): string {
   return "sg"
 }
 
+/** 设置AST-grep CLI路径（用于缓存） */
 export function setSgCliPath(path: string): void {
   resolvedCliPath = path
 }
 
-// CLI supported languages (25 total)
+/** CLI支持的语言列表（共25种） */
 export const CLI_LANGUAGES = [
   "bash",
   "c",
@@ -129,14 +152,17 @@ export const CLI_LANGUAGES = [
   "yaml",
 ] as const
 
-// NAPI supported languages (5 total - native bindings)
+/** NAPI支持的语言列表（共5种，通过原生绑定） */
 export const NAPI_LANGUAGES = ["html", "javascript", "tsx", "css", "typescript"] as const
 
-// Language to file extensions mapping
+/** 默认超时时间（5分钟） */
 export const DEFAULT_TIMEOUT_MS = 300_000
+/** 默认最大输出字节数（1MB） */
 export const DEFAULT_MAX_OUTPUT_BYTES = 1 * 1024 * 1024
+/** 默认最大匹配数（500个） */
 export const DEFAULT_MAX_MATCHES = 500
 
+/** 语言到文件扩展名的映射 */
 export const LANG_EXTENSIONS: Record<string, string[]> = {
   bash: [".bash", ".sh", ".zsh", ".bats"],
   c: [".c", ".h"],
@@ -165,21 +191,22 @@ export const LANG_EXTENSIONS: Record<string, string[]> = {
   yaml: [".yml", ".yaml"],
 }
 
+/** 环境检查结果 */
 export interface EnvironmentCheckResult {
   cli: {
-    available: boolean
-    path: string
-    error?: string
+    available: boolean // CLI是否可用
+    path: string // CLI路径
+    error?: string // 错误信息
   }
   napi: {
-    available: boolean
-    error?: string
+    available: boolean // NAPI是否可用
+    error?: string // 错误信息
   }
 }
 
 /**
- * Check if ast-grep CLI and NAPI are available.
- * Call this at startup to provide early feedback about missing dependencies.
+ * 检查AST-grep CLI和NAPI是否可用
+ * 在启动时调用，提前发现缺失的依赖
  */
 export function checkEnvironment(): EnvironmentCheckResult {
   const cliPath = getSgCliPath()
@@ -226,7 +253,7 @@ export function checkEnvironment(): EnvironmentCheckResult {
 }
 
 /**
- * Format environment check result as user-friendly message.
+ * 格式化环境检查结果为用户友好的消息
  */
 export function formatEnvironmentCheck(result: EnvironmentCheckResult): string {
   const lines: string[] = ["ast-grep Environment Status:", ""]

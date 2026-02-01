@@ -1,3 +1,23 @@
+/**
+ * CLI交互式安装器
+ * 
+ * ## 功能概述
+ * 提供友好的TUI界面，引导用户完成OpenCode的初始化设置。
+ * 
+ * ## 安装步骤
+ * 1. 选择模型提供商（Claude, OpenAI, Gemini等）
+ * 2. 配置API密钥
+ * 3. 选择默认代理和模型
+ * 4. 配置权限设置
+ * 5. 生成配置文件
+ * 
+ * ## TUI库
+ * 使用@clack/prompts提供交互式界面，picocolors提供终端颜色
+ * 
+ * ## 配置生成
+ * 根据用户选择生成.opencode/config.json和oh-my-opencode配置
+ */
+
 import * as p from "@clack/prompts"
 import color from "picocolors"
 import type { InstallArgs, InstallConfig, ClaudeSubscription, BooleanArg, DetectedConfig } from "./types"
@@ -13,18 +33,30 @@ import {
 import { shouldShowChatGPTOnlyWarning } from "./model-fallback"
 import packageJson from "../../package.json" with { type: "json" }
 
+/** 当前插件版本号 */
 const VERSION = packageJson.version
 
+/**
+ * TUI界面使用的符号集
+ * 用于在终端中显示状态、提示和装饰
+ */
 const SYMBOLS = {
-  check: color.green("[OK]"),
-  cross: color.red("[X]"),
-  arrow: color.cyan("->"),
-  bullet: color.dim("*"),
-  info: color.blue("[i]"),
-  warn: color.yellow("[!]"),
-  star: color.yellow("*"),
+  check: color.green("[OK]"),    // 成功标记
+  cross: color.red("[X]"),       // 失败标记
+  arrow: color.cyan("->"),       // 箭头指示
+  bullet: color.dim("*"),        // 列表项标记
+  info: color.blue("[i]"),       // 信息提示
+  warn: color.yellow("[!]"),     // 警告提示
+  star: color.yellow("*"),       // 星号装饰
 }
 
+/**
+ * 格式化提供商显示行
+ * @param name - 提供商名称
+ * @param enabled - 是否启用
+ * @param detail - 可选的详细信息
+ * @returns 格式化的显示字符串
+ */
 function formatProvider(name: string, enabled: boolean, detail?: string): string {
   const status = enabled ? SYMBOLS.check : color.dim("○")
   const label = enabled ? color.white(name) : color.dim(name)
@@ -32,12 +64,17 @@ function formatProvider(name: string, enabled: boolean, detail?: string): string
   return `  ${status} ${label}${suffix}`
 }
 
+/**
+ * 格式化配置摘要显示
+ * 生成包含所有提供商状态和模型分配信息的格式化字符串
+ */
 function formatConfigSummary(config: InstallConfig): string {
   const lines: string[] = []
 
   lines.push(color.bold(color.white("Configuration Summary")))
   lines.push("")
 
+  // 显示各提供商的启用状态
   const claudeDetail = config.hasClaude ? (config.isMax20 ? "max20" : "standard") : undefined
   lines.push(formatProvider("Claude", config.hasClaude, claudeDetail))
   lines.push(formatProvider("OpenAI/ChatGPT", config.hasOpenAI, "GPT-5.2 for Oracle"))
@@ -50,6 +87,7 @@ function formatConfigSummary(config: InstallConfig): string {
   lines.push(color.dim("─".repeat(40)))
   lines.push("")
 
+  // 显示模型分配策略
   lines.push(color.bold(color.white("Model Assignment")))
   lines.push("")
   lines.push(`  ${SYMBOLS.info} Models auto-configured based on provider priority`)
@@ -58,6 +96,7 @@ function formatConfigSummary(config: InstallConfig): string {
   return lines.join("\n")
 }
 
+/** 打印安装/更新模式的标题 */
 function printHeader(isUpdate: boolean): void {
   const mode = isUpdate ? "Update" : "Install"
   console.log()
@@ -65,29 +104,39 @@ function printHeader(isUpdate: boolean): void {
   console.log()
 }
 
+/** 打印带进度的步骤信息 */
 function printStep(step: number, total: number, message: string): void {
   const progress = color.dim(`[${step}/${total}]`)
   console.log(`${progress} ${message}`)
 }
 
+/** 打印成功消息 */
 function printSuccess(message: string): void {
   console.log(`${SYMBOLS.check} ${message}`)
 }
 
+/** 打印错误消息 */
 function printError(message: string): void {
   console.log(`${SYMBOLS.cross} ${color.red(message)}`)
 }
 
+/** 打印信息消息 */
 function printInfo(message: string): void {
   console.log(`${SYMBOLS.info} ${message}`)
 }
 
+/** 打印警告消息 */
 function printWarning(message: string): void {
   console.log(`${SYMBOLS.warn} ${color.yellow(message)}`)
 }
 
+/**
+ * 打印带边框的内容框
+ * 自动计算边框宽度以适应内容，支持ANSI颜色代码
+ */
 function printBox(content: string, title?: string): void {
   const lines = content.split("\n")
+  // 移除ANSI颜色代码来计算实际文本宽度
   const maxWidth = Math.max(...lines.map(l => l.replace(/\x1b\[[0-9;]*m/g, "").length), title?.length ?? 0) + 4
   const border = color.dim("─".repeat(maxWidth))
 
@@ -108,35 +157,45 @@ function printBox(content: string, title?: string): void {
   console.log()
 }
 
+/**
+ * 验证非TUI模式的命令行参数
+ * 检查必需参数是否存在，以及所有参数值是否有效
+ */
 function validateNonTuiArgs(args: InstallArgs): { valid: boolean; errors: string[] } {
   const errors: string[] = []
 
+  // 验证Claude配置（必需）
   if (args.claude === undefined) {
     errors.push("--claude is required (values: no, yes, max20)")
   } else if (!["no", "yes", "max20"].includes(args.claude)) {
     errors.push(`Invalid --claude value: ${args.claude} (expected: no, yes, max20)`)
   }
 
+  // 验证Gemini配置（必需）
   if (args.gemini === undefined) {
     errors.push("--gemini is required (values: no, yes)")
   } else if (!["no", "yes"].includes(args.gemini)) {
     errors.push(`Invalid --gemini value: ${args.gemini} (expected: no, yes)`)
   }
 
+  // 验证Copilot配置（必需）
   if (args.copilot === undefined) {
     errors.push("--copilot is required (values: no, yes)")
   } else if (!["no", "yes"].includes(args.copilot)) {
     errors.push(`Invalid --copilot value: ${args.copilot} (expected: no, yes)`)
   }
 
+  // 验证OpenAI配置（可选）
   if (args.openai !== undefined && !["no", "yes"].includes(args.openai)) {
     errors.push(`Invalid --openai value: ${args.openai} (expected: no, yes)`)
   }
 
+  // 验证OpenCode Zen配置（可选）
   if (args.opencodeZen !== undefined && !["no", "yes"].includes(args.opencodeZen)) {
     errors.push(`Invalid --opencode-zen value: ${args.opencodeZen} (expected: no, yes)`)
   }
 
+  // 验证Z.ai Coding Plan配置（可选）
   if (args.zaiCodingPlan !== undefined && !["no", "yes"].includes(args.zaiCodingPlan)) {
     errors.push(`Invalid --zai-coding-plan value: ${args.zaiCodingPlan} (expected: no, yes)`)
   }
@@ -144,6 +203,9 @@ function validateNonTuiArgs(args: InstallArgs): { valid: boolean; errors: string
   return { valid: errors.length === 0, errors }
 }
 
+/**
+ * 将命令行参数转换为安装配置对象
+ */
 function argsToConfig(args: InstallArgs): InstallConfig {
   return {
     hasClaude: args.claude !== "no",
@@ -156,6 +218,10 @@ function argsToConfig(args: InstallArgs): InstallConfig {
   }
 }
 
+/**
+ * 将检测到的配置转换为TUI初始值
+ * 用于在更新模式下预填充用户之前的选择
+ */
 function detectedToInitialValues(detected: DetectedConfig): { claude: ClaudeSubscription; openai: BooleanArg; gemini: BooleanArg; copilot: BooleanArg; opencodeZen: BooleanArg; zaiCodingPlan: BooleanArg } {
   let claude: ClaudeSubscription = "no"
   if (detected.hasClaude) {
@@ -172,9 +238,15 @@ function detectedToInitialValues(detected: DetectedConfig): { claude: ClaudeSubs
   }
 }
 
+/**
+ * 运行TUI交互模式
+ * 通过一系列交互式问题收集用户的配置选择
+ * @returns 用户选择的配置，如果用户取消则返回null
+ */
 async function runTuiMode(detected: DetectedConfig): Promise<InstallConfig | null> {
   const initial = detectedToInitialValues(detected)
 
+  // 询问Claude订阅类型
   const claude = await p.select({
     message: "Do you have a Claude Pro/Max subscription?",
     options: [
@@ -190,6 +262,7 @@ async function runTuiMode(detected: DetectedConfig): Promise<InstallConfig | nul
     return null
   }
 
+  // 询问OpenAI/ChatGPT订阅
   const openai = await p.select({
     message: "Do you have an OpenAI/ChatGPT Plus subscription?",
     options: [
@@ -204,6 +277,7 @@ async function runTuiMode(detected: DetectedConfig): Promise<InstallConfig | nul
     return null
   }
 
+  // 询问Gemini集成
   const gemini = await p.select({
     message: "Will you integrate Google Gemini?",
     options: [
@@ -218,6 +292,7 @@ async function runTuiMode(detected: DetectedConfig): Promise<InstallConfig | nul
     return null
   }
 
+  // 询问GitHub Copilot订阅
   const copilot = await p.select({
     message: "Do you have a GitHub Copilot subscription?",
     options: [
@@ -232,6 +307,7 @@ async function runTuiMode(detected: DetectedConfig): Promise<InstallConfig | nul
     return null
   }
 
+  // 询问OpenCode Zen访问权限
   const opencodeZen = await p.select({
     message: "Do you have access to OpenCode Zen (opencode/ models)?",
     options: [
@@ -246,6 +322,7 @@ async function runTuiMode(detected: DetectedConfig): Promise<InstallConfig | nul
     return null
   }
 
+  // 询问Z.ai Coding Plan订阅
   const zaiCodingPlan = await p.select({
     message: "Do you have a Z.ai Coding Plan subscription?",
     options: [
@@ -260,6 +337,7 @@ async function runTuiMode(detected: DetectedConfig): Promise<InstallConfig | nul
     return null
   }
 
+  // 构建最终配置对象
   return {
     hasClaude: claude !== "no",
     isMax20: claude === "max20",
@@ -271,7 +349,13 @@ async function runTuiMode(detected: DetectedConfig): Promise<InstallConfig | nul
   }
 }
 
+/**
+ * 运行非TUI模式的安装流程
+ * 使用命令行参数直接配置，不进行交互式提问
+ * @returns 退出码：0表示成功，1表示失败
+ */
 async function runNonTuiInstall(args: InstallArgs): Promise<number> {
+  // 验证命令行参数
   const validation = validateNonTuiArgs(args)
   if (!validation.valid) {
     printHeader(false)
@@ -285,6 +369,7 @@ async function runNonTuiInstall(args: InstallArgs): Promise<number> {
     return 1
   }
 
+  // 检测现有配置
   const detected = detectCurrentConfig()
   const isUpdate = detected.isInstalled
 
@@ -293,6 +378,7 @@ async function runNonTuiInstall(args: InstallArgs): Promise<number> {
   const totalSteps = 6
   let step = 1
 
+  // 步骤1: 检查OpenCode安装状态
   printStep(step++, totalSteps, "Checking OpenCode installation...")
   const installed = await isOpenCodeInstalled()
   const version = await getOpenCodeVersion()
@@ -310,6 +396,7 @@ async function runNonTuiInstall(args: InstallArgs): Promise<number> {
 
   const config = argsToConfig(args)
 
+  // 步骤2: 添加插件到OpenCode配置
   printStep(step++, totalSteps, "Adding oh-my-opencode plugin...")
   const pluginResult = await addPluginToOpenCodeConfig(VERSION)
   if (!pluginResult.success) {
@@ -318,6 +405,7 @@ async function runNonTuiInstall(args: InstallArgs): Promise<number> {
   }
   printSuccess(`Plugin ${isUpdate ? "verified" : "added"} ${SYMBOLS.arrow} ${color.dim(pluginResult.configPath)}`)
 
+  // 步骤3-4: 如果启用Gemini，配置认证插件和提供商
   if (config.hasGemini) {
     printStep(step++, totalSteps, "Adding auth plugins...")
     const authResult = await addAuthPlugins(config)
@@ -335,9 +423,10 @@ async function runNonTuiInstall(args: InstallArgs): Promise<number> {
     }
     printSuccess(`Providers configured ${SYMBOLS.arrow} ${color.dim(providerResult.configPath)}`)
   } else {
-    step += 2
+    step += 2  // 跳过认证和提供商配置步骤
   }
 
+  // 步骤5: 写入oh-my-opencode配置文件
   printStep(step++, totalSteps, "Writing oh-my-opencode configuration...")
   const omoResult = writeOmoConfig(config)
   if (!omoResult.success) {
@@ -346,8 +435,10 @@ async function runNonTuiInstall(args: InstallArgs): Promise<number> {
   }
   printSuccess(`Config written ${SYMBOLS.arrow} ${color.dim(omoResult.configPath)}`)
 
+  // 显示配置摘要
   printBox(formatConfigSummary(config), isUpdate ? "Updated Configuration" : "Installation Complete")
 
+  // 如果未配置Claude，显示性能警告
   if (!config.hasClaude) {
     console.log()
     console.log(color.bgRed(color.white(color.bold(" CRITICAL WARNING "))))
@@ -362,14 +453,17 @@ async function runNonTuiInstall(args: InstallArgs): Promise<number> {
     console.log()
   }
 
+  // 如果没有配置任何提供商，显示回退警告
   if (!config.hasClaude && !config.hasOpenAI && !config.hasGemini && !config.hasCopilot && !config.hasOpencodeZen) {
     printWarning("No model providers configured. Using opencode/big-pickle as fallback.")
   }
 
+  // 显示完成消息
   console.log(`${SYMBOLS.star} ${color.bold(color.green(isUpdate ? "Configuration updated!" : "Installation complete!"))}`)
   console.log(`  Run ${color.cyan("opencode")} to start!`)
   console.log()
 
+  // 显示ultrawork功能提示
   printBox(
     `${color.bold("Pro Tip:")} Include ${color.cyan("ultrawork")} (or ${color.cyan("ulw")}) in your prompt.\n` +
     `All features work like magic—parallel agents, background tasks,\n` +
@@ -383,6 +477,7 @@ async function runNonTuiInstall(args: InstallArgs): Promise<number> {
   console.log(color.dim("oMoMoMoMo... Enjoy!"))
   console.log()
 
+  // 如果配置了需要认证的提供商，显示认证提示
   if ((config.hasClaude || config.hasGemini || config.hasCopilot) && !args.skipAuth) {
     printBox(
       `Run ${color.cyan("opencode auth login")} and select your provider:\n` +
@@ -396,11 +491,18 @@ async function runNonTuiInstall(args: InstallArgs): Promise<number> {
   return 0
 }
 
+/**
+ * 主安装函数
+ * 根据参数选择TUI或非TUI模式执行安装流程
+ * @returns 退出码：0表示成功，1表示失败
+ */
 export async function install(args: InstallArgs): Promise<number> {
+  // 如果指定了非TUI模式，直接运行非交互式安装
   if (!args.tui) {
     return runNonTuiInstall(args)
   }
 
+  // TUI模式：检测现有配置
   const detected = detectCurrentConfig()
   const isUpdate = detected.isInstalled
 
@@ -411,6 +513,7 @@ export async function install(args: InstallArgs): Promise<number> {
     p.log.info(`Existing configuration detected: Claude=${initial.claude}, Gemini=${initial.gemini}`)
   }
 
+  // 检查OpenCode安装状态
   const s = p.spinner()
   s.start("Checking OpenCode installation")
 
@@ -424,9 +527,11 @@ export async function install(args: InstallArgs): Promise<number> {
     s.stop(`OpenCode ${version ?? "installed"} ${color.green("[OK]")}`)
   }
 
+  // 运行TUI交互流程收集配置
   const config = await runTuiMode(detected)
   if (!config) return 1
 
+  // 添加插件到OpenCode配置
   s.start("Adding oh-my-opencode to OpenCode config")
   const pluginResult = await addPluginToOpenCodeConfig(VERSION)
   if (!pluginResult.success) {
@@ -436,6 +541,7 @@ export async function install(args: InstallArgs): Promise<number> {
   }
   s.stop(`Plugin added to ${color.cyan(pluginResult.configPath)}`)
 
+  // 如果启用Gemini，配置认证插件和提供商
   if (config.hasGemini) {
     s.start("Adding auth plugins (fetching latest versions)")
     const authResult = await addAuthPlugins(config)
@@ -456,6 +562,7 @@ export async function install(args: InstallArgs): Promise<number> {
     s.stop(`Provider config added to ${color.cyan(providerResult.configPath)}`)
   }
 
+  // 写入oh-my-opencode配置文件
   s.start("Writing oh-my-opencode configuration")
   const omoResult = writeOmoConfig(config)
   if (!omoResult.success) {
@@ -465,6 +572,7 @@ export async function install(args: InstallArgs): Promise<number> {
   }
   s.stop(`Config written to ${color.cyan(omoResult.configPath)}`)
 
+  // 如果未配置Claude，显示性能警告
   if (!config.hasClaude) {
     console.log()
     console.log(color.bgRed(color.white(color.bold(" CRITICAL WARNING "))))
@@ -479,15 +587,18 @@ export async function install(args: InstallArgs): Promise<number> {
     console.log()
   }
 
+  // 如果没有配置任何提供商，显示回退警告
   if (!config.hasClaude && !config.hasOpenAI && !config.hasGemini && !config.hasCopilot && !config.hasOpencodeZen) {
     p.log.warn("No model providers configured. Using opencode/big-pickle as fallback.")
   }
 
+  // 显示配置摘要
   p.note(formatConfigSummary(config), isUpdate ? "Updated Configuration" : "Installation Complete")
 
   p.log.success(color.bold(isUpdate ? "Configuration updated!" : "Installation complete!"))
   p.log.message(`Run ${color.cyan("opencode")} to start!`)
 
+  // 显示ultrawork功能提示
   p.note(
     `Include ${color.cyan("ultrawork")} (or ${color.cyan("ulw")}) in your prompt.\n` +
     `All features work like magic—parallel agents, background tasks,\n` +
@@ -500,6 +611,7 @@ export async function install(args: InstallArgs): Promise<number> {
 
   p.outro(color.green("oMoMoMoMo... Enjoy!"))
 
+  // 如果配置了需要认证的提供商，显示认证提示
   if ((config.hasClaude || config.hasGemini || config.hasCopilot) && !args.skipAuth) {
     const providers: string[] = []
     if (config.hasClaude) providers.push(`Anthropic ${color.gray("→ Claude Pro/Max")}`)

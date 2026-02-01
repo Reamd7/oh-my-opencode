@@ -1,3 +1,48 @@
+/**
+ * Claude Code 钩子兼容层 (Claude Code Hooks Compatibility Layer)
+ * 
+ * 功能：完整兼容 Claude Code 的 settings.json 钩子系统
+ * 目的：让用户可以在 OpenCode 中使用 Claude Code 的钩子配置，无缝迁移
+ * 
+ * 支持的钩子类型：
+ * 1. PreToolUse：工具执行前钩子，可阻止或修改工具调用
+ * 2. PostToolUse：工具执行后钩子，可追加警告或修改输出
+ * 3. UserPromptSubmit：用户消息提交前钩子，可阻止或修改消息
+ * 4. Stop：会话结束钩子，可自动继续或注入新提示
+ * 5. PreCompact：会话压缩前钩子，可注入上下文到摘要中
+ * 
+ * 工作原理：
+ * 1. 从 ~/.claude/settings.json 或 .claude/settings.json 加载钩子配置
+ * 2. 监听 OpenCode 的生命周期事件（tool.execute.before/after、chat.message、event）
+ * 3. 将事件转换为 Claude Code 钩子上下文
+ * 4. 执行外部脚本/命令（通过子进程）
+ * 5. 根据退出码决定行为：0=通过，1=警告，2=阻止
+ * 6. 将钩子输出注入到代理上下文或工具输出中
+ * 
+ * 钩子配置示例：
+ * {
+ *   "hooks": {
+ *     "PreToolUse": [
+ *       {
+ *         "match": { "tool": "write" },
+ *         "command": "node scripts/check-write.js"
+ *       }
+ *     ],
+ *     "PostToolUse": [
+ *       {
+ *         "match": { "tool": "bash" },
+ *         "command": "node scripts/log-bash.js"
+ *       }
+ *     ]
+ *   }
+ * }
+ * 
+ * 特殊处理：
+ * - todowrite 工具：自动解析 JSON 字符串参数为数组
+ * - 会话状态跟踪：记录错误和中断状态，影响 Stop 钩子行为
+ * - 转录记录：记录所有工具调用和结果到 transcript.jsonl
+ * - 上下文收集器集成：将钩子输出注册到合成消息系统
+ */
 import type { PluginInput } from "@opencode-ai/plugin"
 import { loadClaudeHooksConfig } from "./config"
 import { loadPluginExtendedConfig } from "./config-loader"
@@ -29,16 +74,31 @@ import type { PluginConfig } from "./types"
 import { log, isHookDisabled } from "../../shared"
 import type { ContextCollector } from "../../features/context-injector"
 
+// 会话状态跟踪：记录首次消息处理、错误状态、中断状态
 const sessionFirstMessageProcessed = new Set<string>()
 const sessionErrorState = new Map<string, { hasError: boolean; errorMessage?: string }>()
 const sessionInterruptState = new Map<string, { interrupted: boolean }>()
 
+/**
+ * 创建 Claude Code 钩子兼容层
+ * 
+ * @param ctx - 插件上下文，提供 client API 和目录信息
+ * @param config - 插件配置，用于禁用特定钩子
+ * @param contextCollector - 上下文收集器，用于注册钩子输出到合成消息
+ * @returns 钩子对象，包含所有生命周期事件处理器
+ */
 export function createClaudeCodeHooksHook(
   ctx: PluginInput,
   config: PluginConfig = {},
   contextCollector?: ContextCollector
 ) {
   return {
+    /**
+     * experimental.session.compacting 钩子：会话压缩前执行
+     * 
+     * 用途：在会话压缩（摘要生成）前注入额外上下文
+     * 典型场景：保留重要状态、注入项目信息到摘要中
+     */
     "experimental.session.compacting": async (
       input: { sessionID: string },
       output: { context: string[] }
@@ -68,6 +128,19 @@ export function createClaudeCodeHooksHook(
       }
     },
 
+    /**
+     * chat.message 钩子：用户消息提交前执行
+     * 
+     * 用途：
+     * 1. 执行 UserPromptSubmit 钩子（可阻止或修改消息）
+     * 2. 记录用户消息到 transcript
+     * 3. 将钩子输出注册到上下文收集器（用于合成消息注入）
+     * 
+     * 特殊处理：
+     * - 跳过中断的会话
+     * - 跟踪首次消息处理状态
+     * - 获取父会话 ID（用于子会话上下文）
+     */
     "chat.message": async (
       input: {
         sessionID: string
@@ -167,10 +240,24 @@ export function createClaudeCodeHooksHook(
       }
     },
 
+    /**
+     * tool.execute.before 钩子：工具执行前执行
+     * 
+     * 用途：
+     * 1. 特殊处理 todowrite 工具：解析 JSON 字符串参数为数组
+     * 2. 记录工具调用到 transcript
+     * 3. 缓存工具输入（用于 PostToolUse 钩子）
+     * 4. 执行 PreToolUse 钩子（可阻止或修改工具调用）
+     * 
+     * PreToolUse 钩子行为：
+     * - decision=deny：抛出错误，阻止工具执行
+     * - modifiedInput：修改工具参数
+     */
     "tool.execute.before": async (
       input: { tool: string; sessionID: string; callID: string },
       output: { args: Record<string, unknown> }
     ): Promise<void> => {
+      // todowrite 工具特殊处理：自动解析 JSON 字符串参数
       if (input.tool === "todowrite" && typeof output.args.todos === "string") {
         let parsed: unknown
         try {
@@ -233,6 +320,22 @@ export function createClaudeCodeHooksHook(
       }
     },
 
+    /**
+     * tool.execute.after 钩子：工具执行后执行
+     * 
+     * 用途：
+     * 1. 记录工具结果到 transcript
+     * 2. 执行 PostToolUse 钩子（可追加警告或修改输出）
+     * 
+     * PostToolUse 钩子行为：
+     * - block=true：显示警告 Toast（不阻止执行）
+     * - warnings：追加警告消息到工具输出
+     * - message：追加自定义消息到工具输出
+     * 
+     * 特殊处理：
+     * - 防御性检查：跳过 undefined output（如 /review 命令）
+     * - metadata 处理：优先使用 metadata，否则包装 output.output
+     */
     "tool.execute.after": async (
       input: { tool: string; sessionID: string; callID: string },
       output: { title: string; output: string; metadata: unknown }
@@ -316,9 +419,23 @@ export function createClaudeCodeHooksHook(
       }
     },
 
+    /**
+     * event 钩子：处理会话事件
+     * 
+     * 监听事件：
+     * 1. session.error：记录错误状态（影响 Stop 钩子行为）
+     * 2. session.deleted：清理会话状态
+     * 3. session.idle：会话结束，执行 Stop 钩子
+     * 
+     * Stop 钩子行为：
+     * - block=true + injectPrompt：自动继续会话（注入新提示）
+     * - block=true：仅记录日志（不自动继续）
+     * - 错误/中断会话：忽略 block，避免无限循环
+     */
     event: async (input: { event: { type: string; properties?: unknown } }) => {
       const { event } = input
 
+      // 记录会话错误状态
       if (event.type === "session.error") {
         const props = event.properties as Record<string, unknown> | undefined
         const sessionID = props?.sessionID as string | undefined

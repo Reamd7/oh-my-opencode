@@ -1,51 +1,61 @@
 /**
+ * 上下文注入源标识符
+ * 每个源注册的上下文将被合并并一起注入
+ * 
  * Source identifier for context injection
  * Each source registers context that will be merged and injected together
  */
 export type ContextSourceType =
-  | "keyword-detector"
-  | "rules-injector"
-  | "directory-agents"
-  | "directory-readme"
-  | "custom"
+  | "keyword-detector"    // 关键词检测器
+  | "rules-injector"      // 规则注入器
+  | "directory-agents"    // 目录AGENTS.md
+  | "directory-readme"    // 目录README.md
+  | "custom"              // 自定义源
 
 /**
+ * 上下文优先级
+ * 高优先级的上下文会出现在合并输出的前面
+ * 
  * Priority levels for context ordering
  * Higher priority contexts appear first in the merged output
  */
 export type ContextPriority = "critical" | "high" | "normal" | "low"
 
 /**
+ * 单个上下文条目
+ * 
  * A single context entry registered by a source
  */
 export interface ContextEntry {
-  /** Unique identifier for this entry within the source */
+  /** 条目唯一标识符 | Unique identifier for this entry within the source */
   id: string
-  /** The source that registered this context */
+  /** 注册此上下文的源 | The source that registered this context */
   source: ContextSourceType
-  /** The actual context content to inject */
+  /** 要注入的实际内容 | The actual context content to inject */
   content: string
-  /** Priority for ordering (default: normal) */
+  /** 排序优先级（默认：normal）| Priority for ordering (default: normal) */
   priority: ContextPriority
-  /** Timestamp when registered */
+  /** 注册时间戳 | Timestamp when registered */
   timestamp: number
-  /** Optional metadata for debugging/logging */
+  /** 可选元数据（用于调试/日志）| Optional metadata for debugging/logging */
   metadata?: Record<string, unknown>
 }
 
 /**
+ * 注册上下文的选项
+ * 
  * Options for registering context
  */
 export interface RegisterContextOptions {
-  /** Unique ID for this context entry (used for deduplication) */
+  /** 上下文条目唯一ID（用于去重）| Unique ID for this context entry (used for deduplication) */
   id: string
-  /** Source identifier */
+  /** 源标识符 | Source identifier */
   source: ContextSourceType
-  /** The content to inject */
+  /** 要注入的内容 | The content to inject */
   content: string
-  /** Priority for ordering (default: normal) */
+  /** 排序优先级（默认：normal）| Priority for ordering (default: normal) */
   priority?: ContextPriority
-  /** Optional metadata */
+  /** 可选元数据 | Optional metadata */
   metadata?: Record<string, unknown>
 }
 

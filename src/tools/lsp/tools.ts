@@ -1,3 +1,14 @@
+/**
+ * LSP工具定义 - 6个核心LSP操作
+ * 
+ * 提供代码智能分析的工具接口：
+ * - lsp_goto_definition: 跳转到定义
+ * - lsp_find_references: 查找所有引用
+ * - lsp_symbols: 符号搜索（文档/工作区）
+ * - lsp_diagnostics: 错误和警告诊断
+ * - lsp_prepare_rename: 重命名前验证
+ * - lsp_rename: 跨文件重命名
+ */
 import { tool, type ToolDefinition } from "@opencode-ai/plugin/tool"
 import {
   DEFAULT_MAX_REFERENCES,
@@ -26,6 +37,17 @@ import type {
   WorkspaceEdit,
 } from "./types"
 
+/**
+ * 跳转到定义
+ * 
+ * 使用场景：
+ * - 查找函数/类/变量的定义位置
+ * - 代码导航和理解
+ * 
+ * 示例：
+ * - 光标在函数调用上 -> 跳转到函数定义
+ * - 光标在import上 -> 跳转到模块定义
+ */
 export const lsp_goto_definition: ToolDefinition = tool({
   description: "Jump to symbol definition. Find WHERE something is defined.",
   args: {
@@ -63,6 +85,18 @@ export const lsp_goto_definition: ToolDefinition = tool({
   },
 })
 
+/**
+ * 查找所有引用
+ * 
+ * 使用场景：
+ * - 重构前分析影响范围
+ * - 查找函数/变量的所有使用位置
+ * - 代码审查和理解
+ * 
+ * 示例：
+ * - 重命名前查看所有引用位置
+ * - 删除函数前确认无引用
+ */
 export const lsp_find_references: ToolDefinition = tool({
   description: "Find ALL usages/references of a symbol across the entire workspace.",
   args: {
@@ -100,6 +134,18 @@ export const lsp_find_references: ToolDefinition = tool({
   },
 })
 
+/**
+ * 符号搜索
+ * 
+ * 两种模式：
+ * - document: 获取文件大纲（所有符号）
+ * - workspace: 跨项目搜索符号
+ * 
+ * 使用场景：
+ * - 快速查找类/函数/变量
+ * - 生成文件大纲
+ * - 代码导航
+ */
 export const lsp_symbols: ToolDefinition = tool({
   description: "Get symbols from file (document) or search across workspace. Use scope='document' for file outline, scope='workspace' for project-wide symbol search.",
   args: {
@@ -166,6 +212,22 @@ export const lsp_symbols: ToolDefinition = tool({
   },
 })
 
+/**
+ * 获取诊断信息
+ * 
+ * 在构建前检测错误和警告，比运行构建更快。
+ * 
+ * 使用场景：
+ * - 代码提交前检查错误
+ * - 重构后验证无破坏
+ * - 快速类型检查
+ * 
+ * 严重级别：
+ * - error: 编译错误
+ * - warning: 警告
+ * - information: 信息提示
+ * - hint: 优化建议
+ */
 export const lsp_diagnostics: ToolDefinition = tool({
   description: "Get errors, warnings, hints from language server BEFORE running build.",
   args: {
@@ -213,6 +275,18 @@ export const lsp_diagnostics: ToolDefinition = tool({
   },
 })
 
+/**
+ * 重命名前验证
+ * 
+ * 在执行重命名前检查是否可以安全重命名。
+ * 
+ * 使用场景：
+ * - 避免重命名内置符号
+ * - 检查重命名范围
+ * - 获取当前符号名称
+ * 
+ * 注意：必须在lsp_rename之前调用
+ */
 export const lsp_prepare_rename: ToolDefinition = tool({
   description: "Check if rename is valid. Use BEFORE lsp_rename.",
   args: {
@@ -237,6 +311,20 @@ export const lsp_prepare_rename: ToolDefinition = tool({
   },
 })
 
+/**
+ * 跨文件重命名
+ * 
+ * 自动重命名符号在整个工作区的所有引用。
+ * 
+ * 使用场景：
+ * - 安全重构变量/函数/类名
+ * - 跨文件批量重命名
+ * 
+ * 注意：
+ * - 会直接修改文件
+ * - 建议先调用lsp_prepare_rename验证
+ * - 重命名后建议运行测试
+ */
 export const lsp_rename: ToolDefinition = tool({
   description: "Rename symbol across entire workspace. APPLIES changes to all files.",
   args: {
